@@ -96,7 +96,8 @@ const DATASETS = {
   calls: { // ✔  Tasks workbook — call logs / talk time
     workbook: "tasks",
     require: ["Task", "Assigned", "Status"], exclude: [],
-    schema: { account: "Company / Account", subject: "Subject", rep: "Assigned", status: "Status", task: "Task" },
+    schema: { account: "Company / Account", subject: "Subject", rep: "Assigned", status: "Status", task: "Task",
+      durationMin: "smrtPhone Call Duration (Minutes)", qc: "smrtPhone QC Y/N" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date", "Completed Date", "Date"], repField: "rep",
   },
   directory: { // ✔  Context workbook — org source of truth
@@ -370,6 +371,7 @@ function applyFilters(rows, ds, org, range, dir) {
  * config/kpis.js + lib/kpiEngine.js
  * ========================================================================== */
 const num = (v) => Number(v) || 0;
+const isQC = (r) => num(r.qc) === 1; // smrtPhone QC Y/N flag
 const isOpen = (s) => s && !/closed/i.test(s);
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "opps_closed", format: "currency",
@@ -389,6 +391,10 @@ const KPIS = {
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   calls: { id: "calls", label: "Calls Logged", dataset: "calls", format: "number",
     targetKey: "calls", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  talk_time: { id: "talk_time", label: "Total Talk Time", dataset: "calls", format: "minutes",
+    targetKey: "talk_time", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, r) => s + num(r.durationMin), 0) },
+  qcs: { id: "qcs", label: "Total QCs", dataset: "calls", format: "number",
+    targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length },
 };
 function resolveTarget(kpi, store, org, range) {
   const rows = (store.targets || []).filter((t) => t.kpiId === kpi.targetKey);
@@ -418,7 +424,8 @@ function computeKpi(kpi, store, dir, org, range) {
 }
 const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "currency") return (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
-  if (f === "percent") return (v * 100).toFixed(1) + "%"; return Math.round(v).toLocaleString(); };
+  if (f === "percent") return (v * 100).toFixed(1) + "%";
+  if (f === "minutes") return Math.round(v).toLocaleString() + " min"; return Math.round(v).toLocaleString(); };
 
 /* ============================================================================
  * components/*
@@ -479,7 +486,7 @@ function Notes({ diagnostics, mode }) {
  * pages/ExecutiveDashboard.jsx
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range }) {
-  const cards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "calls"];
+  const cards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "calls", "talk_time", "qcs"];
   const results = useMemo(() => Object.fromEntries(cards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
 
   const byMonth = useMemo(() => { const m = {};
@@ -492,6 +499,13 @@ function ExecutiveDashboard({ store, dir, org, range }) {
     const by = {}; results.closed_revenue.rows.forEach((o) => { const k = o.owner || "—"; (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1; });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
   }, [results.closed_revenue.rows, dir]);
+  const repActivity = useMemo(() => {
+    const by = {};
+    results.calls.rows.forEach((r) => { const k = r.rep || "—";
+      (by[k] = by[k] || { rep: k, minutes: 0, qcs: 0, calls: 0 });
+      by[k].minutes += num(r.durationMin); if (isQC(r)) by[k].qcs += 1; by[k].calls += 1; });
+    return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.rep]?.team })).sort((a, b) => b.minutes - a.minutes);
+  }, [results.calls.rows, dir]);
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} />)}</div>
@@ -523,6 +537,17 @@ function ExecutiveDashboard({ store, dir, org, range }) {
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))}</tbody>
+      </table></Panel>
+    <Panel title="Rep activity (talk time &amp; QCs)">
+      <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+        <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
+          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Team</th>
+          <th className="pb-2 font-medium text-right">Talk Time</th><th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Calls</th></tr></thead>
+        <tbody>{repActivity.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+          <td className="py-2 font-medium">{row.rep}</td><td className="py-2" style={{ color: T.sub }}>{row.team || "—"}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.calls.toLocaleString()}</td></tr>))}</tbody>
       </table></Panel>
   </div>);
 }
