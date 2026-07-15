@@ -211,9 +211,10 @@ async function loadAll() {
     if (useGoogle && !rows.length)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
-    
+  }
   return { store, diagnostics, mode: useGoogle ? "google" : "mock" };
 }
+
 /* ============================================================================
  * SAMPLE DATA (used only with no API key). Keyed by real source headers.
  * ========================================================================== */
