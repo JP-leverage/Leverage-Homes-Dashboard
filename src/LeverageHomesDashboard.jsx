@@ -98,12 +98,26 @@ const DATASETS = {
       outcome: "Appointment Outcome", eventType: "Event Type" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy", // per-rep = the SETTER (Created By); Assigned is the attendee, handled in the scorecard
   },
-  leads: { // ✔  Marketing workbook — lead-level rows by source (no spend data exists)
+  leads: { // ✔  Marketing workbook — the 5 per-source lead tabs (Call Center, Texting, Website, Direct Mail, PPL)
     workbook: "marketing",
-    require: ["Lead ID", "Lead Source"], exclude: [],
+    require: ["Lead ID", "Lead Source"], exclude: [], tabExclude: /^All leads|Reactivated/i, // drop the mislabeled "All leads" (a Call-Center dup) and Reactivated
     schema: { leadId: "Lead ID", account: "Company / Account", status: "Lead Status",
       icp: "Total Tier 1 ICP", segment: "Marketing Segmentation", source: "Lead Source" },
     dedupe: (r) => r.leadId, dateField: "date", dateCandidates: ["Create Date", "Created Date"], repField: null,
+  },
+  mkt_opps: { // ✔  Marketing workbook — opps created tagged with Lead Source + Segmentation
+    workbook: "marketing",
+    require: ["Opportunity ID", "Lead Source"], exclude: [], tabInclude: /All Opps/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", source: "Lead Source",
+      segment: "Marketing Segmentation", icp: "Total ICP Score", isaIcp: "ISA ICP Total Score" },
+    dedupe: (r) => r.id, dateField: "date", dateCandidates: ["Created Date"], repField: null,
+  },
+  reactivated: { // ✔  Marketing workbook — leads reactivated (Lead Status change) by source
+    workbook: "marketing",
+    require: ["Lead ID", "Field / Event"], exclude: [], tabInclude: /Reactivated/i,
+    schema: { leadId: "Lead ID", source: "Lead Source", segment: "Marketing Segmentation",
+      oldValue: "Old Value", newValue: "New Value" },
+    dedupe: (r) => r.leadId, dateField: "date", dateCandidates: ["Edit Date"], repField: null,
   },
   leads_claimed: { // ✔  Leads workbook — Salesforce owner-change history; New Value = the rep who claimed the lead
     workbook: "leads_wb",
@@ -318,7 +332,8 @@ function buildSample() {
  * lib/directory.js  — org source of truth (graceful when empty).
  * ========================================================================== */
 function buildDirectory(store) {
-  const people = store.directory || [];
+  const clean = (v) => (typeof v === "string" ? v.trim() : v); // stray trailing spaces in the sheet must never create phantom dropdown values or break rep matching
+  const people = (store.directory || []).map((p) => ({ ...p, rep: clean(p.rep), name: clean(p.name), role: clean(p.role), team: clean(p.team), department: clean(p.department), company: clean(p.company) }));
   const byRep = {}; people.forEach((p) => { if (p.rep) byRep[p.rep] = p; });
   const distinct = (f) => [...new Set(people.map((p) => p[f]).filter(Boolean))].sort();
   // Rep options fall back to actual owners in the data if the directory is empty.
@@ -423,6 +438,22 @@ const KPIS = {
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing",
+    qualify: (r) => r.source === "Call Center", agg: (rows) => rows.length },
+  leads_texting: { id: "leads_texting", label: "Texting", dataset: "leads", format: "number", domain: "marketing",
+    qualify: (r) => r.source === "Text Message Campaign", agg: (rows) => rows.length },
+  leads_website: { id: "leads_website", label: "Website", dataset: "leads", format: "number", domain: "marketing",
+    qualify: (r) => r.source === "Website", agg: (rows) => rows.length },
+  leads_direct_mail: { id: "leads_direct_mail", label: "Direct Mail", dataset: "leads", format: "number", domain: "marketing",
+    qualify: (r) => r.source === "Direct Mail Campaign", agg: (rows) => rows.length },
+  leads_ppl: { id: "leads_ppl", label: "PPL", dataset: "leads", format: "number", domain: "marketing",
+    qualify: (r) => r.source === "Pay Per Lead", agg: (rows) => rows.length },
+  reactivated_leads: { id: "reactivated_leads", label: "Reactivated Leads", dataset: "reactivated", format: "number", domain: "marketing",
+    agg: (rows) => rows.length },
+  mkt_opps_created: { id: "mkt_opps_created", label: "Opps Created (sourced)", dataset: "mkt_opps", format: "number", domain: "marketing",
+    agg: (rows) => rows.length },
+  avg_lead_icp: { id: "avg_lead_icp", label: "Avg Lead ICP", dataset: "leads", format: "decimal", domain: "marketing",
+    compute: (rows) => rows.length ? rows.reduce((s, r) => s + num(r.icp), 0) / rows.length : 0 },
   leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number",
     targetKey: "leads_claimed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_deaded: { id: "leads_deaded", label: "Leads Deaded", dataset: "leads_deaded", format: "number",
@@ -467,7 +498,22 @@ function computeKpi(kpi, store, dir, org, range) {
 const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "currency") return (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
   if (f === "percent") return (v * 100).toFixed(1) + "%";
-  if (f === "minutes") return Math.round(v).toLocaleString() + " min"; return Math.round(v).toLocaleString(); };
+  if (f === "minutes") return Math.round(v).toLocaleString() + " min";
+  if (f === "decimal") return (Math.round(v * 10) / 10).toFixed(1); return Math.round(v).toLocaleString(); };
+// Count rows by a key and attach share-of-total — used for the marketing breakdown bars.
+function breakdown(rows, keyFn) {
+  const m = {}; rows.forEach((r) => { const k = String(keyFn(r) ?? "").trim() || "(unset)"; m[k] = (m[k] || 0) + 1; });
+  const total = rows.length || 1;
+  return { total: rows.length, items: Object.entries(m).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count) };
+}
+function Bars({ items, tint }) {
+  return (<div className="flex flex-col gap-2">{items.map((o) => (
+    <div key={o.label} className="flex items-center gap-3">
+      <div className="text-[12px] shrink-0" style={{ width: 160, color: T.sub }}>{o.label}</div>
+      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: tint || T.accent }} /></div>
+      <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
+    </div>))}</div>);
+}
 
 /* ============================================================================
  * components/*
@@ -566,7 +612,7 @@ function Notes({ diagnostics, mode }) {
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
 
@@ -618,14 +664,27 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const total = rows.length || 1;
     return { total: rows.length, items: Object.entries(m).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count) };
   }, [store, org, range, dir]);
+  // Marketing breakdowns (period-filtered, company-wide — leads/opps carry no rep)
+  const mktLeadsBySource  = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.source), [store, org, range, dir]);
+  const mktLeadsBySegment = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.segment), [store, org, range, dir]);
+  const mktOppsBySource   = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.source), [store, org, range, dir]);
+  const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} />)}</div>
-    {isMktView ? (
+    {isMktView ? (<>
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
+        <Panel title="Leads by marketing segmentation"><Bars items={mktLeadsBySegment.items} tint={T.chart[1]} /></Panel>
+      </div>
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Panel title="Opps created by source"><Bars items={mktOppsBySource.items} tint={T.chart[3]} /></Panel>
+        <Panel title="Opps created by segmentation"><Bars items={mktOppsBySegment.items} tint={T.chart[4]} /></Panel>
+      </div>
       <Panel title="Marketing view">
-        <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics. Per-rep sales views (revenue, pipeline, appointments, scorecard) are hidden here since Marketing has no individual reps in the directory. More marketing KPIs will land here as sources are wired.</div>
+        <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
-    ) : (<>
+    </>) : (<>
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
       <Panel title="Closed revenue by month (Total Net Revenue)"><div style={{ height: 240 }}><ResponsiveContainer>
         <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
