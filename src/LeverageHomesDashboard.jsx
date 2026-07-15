@@ -105,6 +105,12 @@ const DATASETS = {
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score" },
     dedupe: (r) => `${r.id}|${r.date}`, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
+  appt_funnel: { // ✔  Pipeline workbook — "Totals Appt To Arip": appointment→ARIP funnel (appt-type mix + which appts led to an ARIP). No appt date in export → appts are all-time.
+    workbook: "pipeline",
+    require: ["Deals to Arip", "Created By", "Appointment Type"], exclude: [], tabInclude: /Totals Appt To Arip/i,
+    schema: { name: "Opportunity Name", rep: "Created By", flag: "Deals to Arip", apptType: "Appointment Type", aripDate: "Arip Date" },
+    dedupe: null, dateField: null, repField: "rep",
+  },
   appointments: { // ✔  Activities workbook — real appointment events
     workbook: "activities",
     require: ["Appointment Outcome", "Event Type"], exclude: [],
@@ -610,7 +616,19 @@ function FilterBar({ org, setOrg, date, setDate, dir }) {
           <input type="date" value={date.end} onChange={(e) => setDate({ ...date, end: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} /></label></>)}
     </div></div>);
 }
-function KpiCard({ kpi, result, breakout }) {
+function Sparkline({ data, color }) {
+  if (!data || data.length < 2) return null;
+  const vals = data.map((d) => d.value); const max = Math.max(...vals); const min = Math.min(...vals, 0);
+  const W = 100, H = 26, n = data.length;
+  const x = (i) => (i / (n - 1)) * W;
+  const y = (v) => max === min ? H / 2 : H - (((v - min) / (max - min)) * (H - 4) + 2);
+  const line = data.map((d, i) => `${x(i).toFixed(1)},${y(d.value).toFixed(1)}`).join(" ");
+  return (<svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 26, display: "block" }}>
+    <polyline points={`0,${H} ${line} ${W},${H}`} fill={color || T.accent} fillOpacity="0.12" stroke="none" />
+    <polyline points={line} fill="none" stroke={color || T.accent} strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+  </svg>);
+}
+function KpiCard({ kpi, result, breakout, spark }) {
   const color = result.status === "good" ? T.good : result.status === "warn" ? T.warn : result.status === "bad" ? T.bad : T.faint;
   const pct = result.progress == null ? null : Math.min(1, Math.max(0, result.progress));
   const bmax = breakout && breakout.length ? Math.max(...breakout.map((b) => b.value)) : 0;
@@ -626,6 +644,7 @@ function KpiCard({ kpi, result, breakout }) {
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
       : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
       : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}
+    {spark && <div className="pt-1"><Sparkline data={spark} color={result.status === "bad" ? T.bad : T.accent} /></div>}
     {breakout && breakout.length > 0 && (<div className="flex flex-col gap-1.5 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
       {breakout.slice(0, 3).map((b) => (<div key={b.label} className="flex items-center gap-2">
         <span className="text-[11px] shrink-0 truncate" style={{ width: 92, color: T.sub }} title={b.label}>{b.label}</span>
@@ -673,6 +692,34 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     });
     return out;
   }, [cards, results, dir]);
+  // Sparklines: monthly trend per volume/sum KPI (org-filtered, all periods). Skipped for averages, rates, and company-scope snapshots.
+  const sparks = useMemo(() => {
+    const out = {};
+    cards.forEach((id) => {
+      const kpi = KPIS[id], ds = DATASETS[kpi.dataset];
+      if (!kpi.agg || ds.companyScope || !ds.dateField) { out[id] = null; return; }
+      const rows = applyFilters(store[kpi.dataset] || [], ds, org, null, dir);
+      const src = kpi.qualify ? rows.filter(kpi.qualify) : rows;
+      const m = {}; src.forEach((r) => { const k = monthKey(r[ds.dateField]); if (k) (m[k] = m[k] || []).push(r); });
+      const series = Object.entries(m).sort().map(([label, rs]) => ({ label, value: kpi.agg(rs) }));
+      out[id] = series.length >= 2 ? series : null;
+    });
+    return out;
+  }, [cards, store, org, dir]);
+  // Appt → ARIP funnel (Totals Appt To Arip): appt-type mix (all-time) + ARIP conversion (period-aware).
+  const apptFunnel = useMemo(() => {
+    const rows = applyFilters(store.appt_funnel || [], DATASETS.appt_funnel, org, null, dir);
+    const byType = {}; const opps = new Set(); const aripOpps = new Set();
+    rows.forEach((r) => {
+      const t = String(r.apptType || "").trim() || "(unset)"; byType[t] = (byType[t] || 0) + 1;
+      if (r.name) opps.add(r.name);
+      if (Number(r.flag) === 1 && r.name) { const d = parseDate(r.aripDate);
+        if (!range || (d && d >= range.start && d <= range.end)) aripOpps.add(r.name); }
+    });
+    const total = rows.length || 1;
+    const items = Object.entries(byType).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count);
+    return { appts: rows.length, uniqueOpps: opps.size, arips: aripOpps.size, conv: opps.size ? aripOpps.size / opps.size : 0, items };
+  }, [store, org, range, dir]);
 
   // Charts are period-independent on purpose: the revenue trend shows every month with data, and the
   // pipeline is a live snapshot of open deals — neither should blank out just because the period is a short window.
@@ -741,7 +788,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
 
   return (<div className="flex flex-col gap-5">
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} />)}</div>
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>
     {isMktView ? (<>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
@@ -781,6 +828,15 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
       </BarChart></ResponsiveContainer></div></Panel>
+    <Panel title="Appt Set → ARIP (appointment funnel)">
+      <Bars items={apptFunnel.items} tint={T.chart[2]} />
+      <div className="grid gap-3 mt-3 pt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)", borderTop: `1px solid ${T.border}` }}>
+        {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
+          <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
+            <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
+      </div>
+      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period. Filter to a rep to see just their funnel.</div>
+    </Panel>
     <Panel title="Owner leaderboard (closed revenue)">
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
