@@ -44,6 +44,7 @@ const WORKBOOKS = {
   activities:    { id: "1gfYW52duE4tmNr5b92F2HvanZroMlcaQZ01_5f4bgac", title: "Homes Dashboard Pt 1 (Activities)" },
   marketing:     { id: "1lkftyL4-_kX-hxHXQZ_ylwPlFQg2wYJBXXHE2bzN4wc", title: "Homes Dashboard PT1 (Marketing)" },
   tasks:         { id: "1Vs-IMKBDW3FilFSM8gQKo1NqSgUqh0aVPhFPb4wGOPE", title: "Homes Dashboard Pt 1 (Tasks)" },
+  leads_wb:      { id: "1iS4PLBML63qWqpgWwxRH83jFVw7TJ9SAlHK06JQ2MmI", title: "Homes Dashboard Pt 1 (Leads)" },
 };
 
 /* ============================================================================
@@ -94,6 +95,21 @@ const DATASETS = {
     schema: { leadId: "Lead ID", account: "Company / Account", status: "Lead Status",
       icp: "Total Tier 1 ICP", segment: "Marketing Segmentation", source: "Lead Source" },
     dedupe: (r) => r.leadId, dateField: "date", dateCandidates: ["Create Date", "Created Date"], repField: null,
+  },
+  leads_claimed: { // ✔  Leads workbook — Salesforce owner-change history; New Value = the rep who claimed the lead
+    workbook: "leads_wb",
+    require: ["Lead ID", "New Value", "Edit Date"], exclude: [], tabInclude: /Leads Claimed/i, // Deaded tabs share headers
+    schema: { leadId: "Lead ID", account: "Company", status: "Lead Status", icp: "Total Tier 1 ICP",
+      rep: "New Value", oldValue: "Old Value" },
+    // one rep can re-claim the same lead across months — dedupe to distinct (rep, lead) so it counts leads, not events
+    dedupe: (r) => `${String(r.rep).trim()}|${r.leadId}`, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep",
+  },
+  leads_deaded: { // ✔  Leads workbook — status→Dead history; Edited By = the rep who marked it dead (New Value is just "Dead")
+    workbook: "leads_wb",
+    require: ["Lead ID", "Edited By", "Edit Date"], exclude: [], tabInclude: /Leads Deaded/i,
+    schema: { leadId: "Lead ID", account: "Company", status: "Lead Status", icp: "Total Tier 1 ICP",
+      rep: "Edited By", oldValue: "Old Value", newValue: "New Value" },
+    dedupe: (r) => `${String(r.rep).trim()}|${r.leadId}`, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep",
   },
   calls: { // ✔  Tasks workbook — call logs / talk time
     workbook: "tasks",
@@ -156,10 +172,15 @@ function rowsToObjects(values, hints) {
     .filter((r) => r.some((c) => c !== "" && c != null))
     .map((r) => { const o = {}; headers.forEach((h, i) => { if (h) o[h] = r[i]; }); return o; }) };
 }
-// A tab belongs to a dataset if its headers include all `require` and no `exclude`.
-function tabMatches(headers, ds) {
+// A tab belongs to a dataset if its headers include all `require`, none of `exclude`,
+// and (optionally) its title matches `tabInclude` / avoids `tabExclude` — needed when
+// two tab families share identical headers (e.g. Leads Claimed vs Leads Deaded).
+function tabMatches(headers, ds, title = "") {
   const h = headers || [];
-  return ds.require.every((x) => h.includes(x)) && !ds.exclude.some((x) => h.includes(x));
+  if (!(ds.require.every((x) => h.includes(x)) && !ds.exclude.some((x) => h.includes(x)))) return false;
+  if (ds.tabInclude && !ds.tabInclude.test(title)) return false;
+  if (ds.tabExclude && ds.tabExclude.test(title)) return false;
+  return true;
 }
 function makeGoogleClient(key) {
   const cache = {}; // workbook -> { title: {headers, rows} }
@@ -176,7 +197,7 @@ function makeGoogleClient(key) {
       }
       let rows = [], claimed = [];
       for (const [title, parsed] of Object.entries(cache[ds.workbook])) {
-        if (tabMatches(parsed.headers, ds)) { rows = rows.concat(parsed.rows); claimed.push(title); }
+        if (tabMatches(parsed.headers, ds, title)) { rows = rows.concat(parsed.rows); claimed.push(title); }
       }
       return { rows, claimed };
     },
@@ -393,6 +414,10 @@ const KPIS = {
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number",
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number",
+    targetKey: "leads_claimed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  leads_deaded: { id: "leads_deaded", label: "Leads Deaded", dataset: "leads_deaded", format: "number",
+    targetKey: "leads_deaded", targetType: "volume", higherIsBetter: false, agg: (rows) => rows.length },
   calls: { id: "calls", label: "Calls Logged", dataset: "calls", format: "number",
     targetKey: "calls", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   talk_time: { id: "talk_time", label: "Total Talk Time", dataset: "calls", format: "minutes",
@@ -487,8 +512,8 @@ function Notes({ diagnostics, mode }) {
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
     <div className="text-[13px] font-semibold mb-1" style={{ color: T.warn }}>Data notes</div>
     <ul className="text-[12px] flex flex-col gap-1" style={{ color: T.ink }}>
-      <li>All six workbooks are wired: Opportunities, Pipeline, Activities (appointments), Marketing (leads), Tasks (calls), Context (directory). Date filtering is active on every dataset that carries a date column (all now do).</li>
-      <li><b>Targets</b> is the one open item — it appears to be a second tab inside the Context workbook, not yet confirmed. Goal-progress bars stay at “No target set” until that tab is mapped.</li>
+      <li>Seven workbooks are wired: Opportunities, Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Context (directory). Date filtering is active on every dataset that carries a date column.</li>
+      <li><b>Leads Claimed</b> is now live per rep (New Value = claimer, counted by distinct lead on Edit Date). <b>Opps → ARIP</b> and <b>Targets</b> are the remaining open items — send the per-rep ARIP report and confirm the Targets tab to finish them.</li>
       {mode === "google" && diagnostics.map((d) => <li key={d.dataset} style={{ color: T.warn }}>⧗ {d.dataset}: {d.note}</li>)}
     </ul></div>);
 }
@@ -497,7 +522,7 @@ function Notes({ diagnostics, mode }) {
  * pages/ExecutiveDashboard.jsx
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range }) {
-  const cards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "calls", "talk_time", "qcs"];
+  const cards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const results = useMemo(() => Object.fromEntries(cards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
 
   const byMonth = useMemo(() => { const m = {};
@@ -517,11 +542,15 @@ function ExecutiveDashboard({ store, dir, org, range }) {
     const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
     const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
     const apptRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
+    const leadRows = applyFilters(store.leads_claimed || [], DATASETS.leads_claimed, ALL_ORG, range, dir);
+    const deadRows = applyFilters(store.leads_deaded || [], DATASETS.leads_deaded, ALL_ORG, range, dir);
     const key = (v) => String(v ?? "").trim();
     const isMet = (o) => /appointment met/i.test(String(o || "")); // "Appointment Met" = attended
     const M = {};
-    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
+    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, leadsClaimed: 0, leadsDeaded: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
     oppRows.forEach((r) => { const k = key(r.createdBy); if (k) ensure(k).oppsCreated += 1; });
+    leadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsClaimed += 1; });
+    deadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsDeaded += 1; });
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
     apptRows.forEach((r) => {
       const s = key(r.createdBy); if (s) { const e = ensure(s); e.apptsSet += 1; if (isMet(r.outcome)) e.setMet += 1; }        // setter
@@ -581,13 +610,15 @@ function ExecutiveDashboard({ store, dir, org, range }) {
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
-          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Talk Time</th>
+          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Leads Claimed</th><th className="pb-2 font-medium text-right">Leads Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
           <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
           <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Attend %</th></tr></thead>
         <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 font-medium">{row.rep}</td>
           <td className="py-2" style={{ color: T.sub }}>{row.role || "—"}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsClaimed.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsDeaded.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
