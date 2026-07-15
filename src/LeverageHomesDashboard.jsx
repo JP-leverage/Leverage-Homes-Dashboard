@@ -19,7 +19,10 @@ import {
  * enable Google Sheets API. No key = sample data so the UI always renders.
  * ========================================================================== */
 
-const API_KEY = (typeof window !== "undefined" && window.SHEETS_API_KEY) || ""; // set via .env → main.jsx
+const API_KEY =
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_SHEETS_API_KEY) ||
+  (typeof window !== "undefined" && window.SHEETS_API_KEY) ||
+  "";
 
 const T = {
   canvas: "#F6F7F9", card: "#FFFFFF", border: "#E6E9ED", ink: "#0F1B2D",
