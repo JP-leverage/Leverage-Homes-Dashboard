@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 
 /* ============================================================================
@@ -610,21 +610,29 @@ function FilterBar({ org, setOrg, date, setDate, dir }) {
           <input type="date" value={date.end} onChange={(e) => setDate({ ...date, end: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} /></label></>)}
     </div></div>);
 }
-function KpiCard({ kpi, result }) {
+function KpiCard({ kpi, result, breakout }) {
   const color = result.status === "good" ? T.good : result.status === "warn" ? T.warn : result.status === "bad" ? T.bad : T.faint;
   const pct = result.progress == null ? null : Math.min(1, Math.max(0, result.progress));
+  const bmax = breakout && breakout.length ? Math.max(...breakout.map((b) => b.value)) : 0;
   return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-start justify-between"><span className="text-[13px] font-medium" style={{ color: T.sub }}>{kpi.label}</span>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
     {result.unattributable
-      ? (<><div className="text-[28px] font-bold leading-none tracking-tight" style={{ color: T.faint }}>n/a</div>
+      ? (<><div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
-      : (<><div className="text-[28px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+      : (<><div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
       : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
-      : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}</>)}</div>);
+      : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}
+    {breakout && breakout.length > 0 && (<div className="flex flex-col gap-1.5 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+      {breakout.slice(0, 3).map((b) => (<div key={b.label} className="flex items-center gap-2">
+        <span className="text-[11px] shrink-0 truncate" style={{ width: 92, color: T.sub }} title={b.label}>{b.label}</span>
+        <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${bmax ? Math.round((b.value / bmax) * 100) : 0}%`, height: "100%", background: T.accent }} /></div>
+        <span className="text-[11px] text-right shrink-0" style={{ width: 60, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</span>
+      </div>))}
+    </div>)}</>)}</div>);
 }
 function Panel({ title, children }) {
   return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
@@ -648,13 +656,38 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
+  // Per-tile breakout: split each attributable KPI by the primary rep's team, reusing that KPI's own aggregation.
+  const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
+  const breakouts = useMemo(() => {
+    const out = {};
+    cards.forEach((id) => {
+      const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
+      if (!res || res.unattributable || ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
+      const primary = ds.repField || ds.repFields[0];
+      const groups = {};
+      res.rows.forEach((row) => { const t = teamOf(row[primary]); if (t) (groups[t] = groups[t] || []).push(row); });
+      const items = Object.entries(groups).map(([label, rows]) => ({ label,
+        value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows) }))
+        .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+      out[id] = items.length ? items : null;
+    });
+    return out;
+  }, [cards, results, dir]);
 
+  // Charts are period-independent on purpose: the revenue trend shows every month with data, and the
+  // pipeline is a live snapshot of open deals — neither should blank out just because the period is a short window.
   const byMonth = useMemo(() => { const m = {};
-    results.closed_revenue.rows.forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
-    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [results.closed_revenue.rows]);
+    applyFilters(store.opps_closed || [], DATASETS.opps_closed, org, null, dir)
+      .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
+    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
   const byStage = useMemo(() => { const m = {};
-    results.pipeline_forecast.rows.filter((o) => isOpen(o.stage)).forEach((o) => { m[o.stage] = (m[o.stage] || 0) + num(o.forecast); });
-    return Object.entries(m).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value); }, [results.pipeline_forecast.rows]);
+    applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
+      .forEach((o) => { const s = String(o.stage || "").trim(); if (s) m[s] = (m[s] || 0) + num(o.forecast); });
+    return Object.entries(m).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value); }, [store, org, dir]);
+  const byCloseMonth = useMemo(() => { const m = {};
+    applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
+      .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
+    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
   const leaderboard = useMemo(() => {
     const by = {}; results.closed_revenue.rows.forEach((o) => { const k = o.owner || "—"; (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1; });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
@@ -708,7 +741,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
 
   return (<div className="flex flex-col gap-5">
-    <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} />)}</div>
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} />)}</div>
     {isMktView ? (<>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
@@ -723,23 +756,31 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       </Panel>
     </>) : (<>
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
-      <Panel title="Closed revenue by month (Total Net Revenue)"><div style={{ height: 240 }}><ResponsiveContainer>
-        <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+      <Panel title="Deals · Close Date × Projected Rev (Total Forecasted Revenue)"><div style={{ height: 260 }}><ResponsiveContainer>
+        <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
-          <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.accent} />)}</Bar>
+          <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
-      <Panel title="Open pipeline by stage (forecast)"><div style={{ height: 240 }}><ResponsiveContainer>
-        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
+      <Panel title="Deals · Stage × Projected Rev (Total Forecasted Revenue)"><div style={{ height: 260 }}><ResponsiveContainer>
+        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
-          <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={128} />
+          <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={132} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]}>{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
+          <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
+    <Panel title="Closed revenue by month (actual Total Net Revenue · all periods)"><div style={{ height: 200 }}><ResponsiveContainer>
+      <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
+        <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+        <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
+      </BarChart></ResponsiveContainer></div></Panel>
     <Panel title="Owner leaderboard (closed revenue)">
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
