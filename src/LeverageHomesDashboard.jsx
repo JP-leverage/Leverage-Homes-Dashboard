@@ -211,17 +211,9 @@ async function loadAll() {
     if (useGoogle && !rows.length)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
-    if (useGoogle && ds.dateField) {
-      const vals = store[key].map((r) => r[ds.dateField]);
-      const ok = vals.filter((v) => parseDate(v)).length;
-      const samples = [...new Set(vals.filter((v) => v != null && v !== ""))].slice(0, 6)
-        .map((v) => `${JSON.stringify(v)} (${typeof v})`);
-      console.log(`[${key}] date parse: ${ok}/${vals.length} ok · field="${ds.dateField}" · samples:`, samples);
-    }
-  }
+    
   return { store, diagnostics, mode: useGoogle ? "google" : "mock" };
 }
-
 /* ============================================================================
  * SAMPLE DATA (used only with no API key). Keyed by real source headers.
  * ========================================================================== */
