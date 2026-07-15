@@ -62,14 +62,16 @@ const DATASETS = {
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner",
       recordType: "Opportunity Record Type", icp: "ISA ICP Total Score", createdBy: "Created By" },
     dedupe: (r) => r.id, dateField: "date",
-    dateCandidates: ["Created Date", "Create Date", "Date Created", "Opportunity Created Date"], repField: "owner",
+    dateCandidates: ["Created Date", "Create Date", "Date Created", "Opportunity Created Date"], repField: "createdBy", // per-rep = who CREATED it (setter), not who owns it (closer)
   },
   opps_closed: { // ✔  actuals — Total Net Revenue by Close Date
     workbook: "opportunities",
     require: ["Total Net Revenue", "Close Date"], exclude: [],
     schema: { owner: "Opportunity Owner", name: "Opportunity Name", revenue: "Total Net Revenue",
-      acqManager: "Acquisition Manager", followUp: "Follow Up Specialist", closeDate: "Close Date" },
-    dedupe: (r) => `${r.name}|${r.closeDate}`, dateField: "closeDate", repField: "owner",
+      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", closeDate: "Close Date" },
+    // a rep is credited on a closed deal via ANY of these roles (owner / AM / AM2 / follow-up), not just owner
+    dedupe: (r) => `${r.name}|${r.closeDate}`, dateField: "closeDate",
+    repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   pipeline: { // ✔  forecast — open-stage Total Forecasted Revenue by Close Date
     workbook: "pipeline",
@@ -84,7 +86,7 @@ const DATASETS = {
     require: ["Appointment Outcome", "Event Type"], exclude: [],
     schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned",
       outcome: "Appointment Outcome", eventType: "Event Type" },
-    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep",
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy", // per-rep = the SETTER (Created By); Assigned is the attendee, handled in the scorecard
   },
   leads: { // ✔  Marketing workbook — lead-level rows by source (no spend data exists)
     workbook: "marketing",
@@ -358,10 +360,11 @@ const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}
  * filter (e.g. opps_created has no per-row date).
  * ========================================================================== */
 function applyFilters(rows, ds, org, range, dir) {
-  const reps = ds.repField ? repsInScope(dir, org) : null;
+  const fields = ds.repFields || (ds.repField ? [ds.repField] : null); // a rep can be credited through several role columns
+  const reps = fields ? repsInScope(dir, org) : null;
   const dateOn = !!(ds.dateField && rows.some((r) => r[ds.dateField])); // off until a date column exists
   return rows.filter((row) => {
-    if (reps && !reps.has(String(row[ds.repField] ?? "").trim())) return false;
+    if (reps && !fields.some((f) => reps.has(String(row[f] ?? "").trim()))) return false;
     if (dateOn) { const t = parseDate(row[ds.dateField]); if (!t || t < range.start || t > range.end) return false; }
     return true;
   });
@@ -412,6 +415,10 @@ function resolveTarget(kpi, store, org, range) {
 }
 function computeKpi(kpi, store, dir, org, range) {
   const ds = DATASETS[kpi.dataset];
+  // Datasets with no per-row rep can't honor a person/team/role filter — say so instead of showing a company-wide number.
+  const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
+  if (!(ds.repField || ds.repFields) && peopleFilter)
+    return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
   const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
   const target = kpi.targetKey ? resolveTarget(kpi, store, org, range) : null;
@@ -463,11 +470,14 @@ function KpiCard({ kpi, result }) {
   return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-start justify-between"><span className="text-[13px] font-medium" style={{ color: T.sub }}>{kpi.label}</span>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
-    <div className="text-[26px] font-semibold leading-none" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+    {result.unattributable
+      ? (<><div className="text-[26px] font-semibold leading-none" style={{ color: T.faint }}>n/a</div>
+          <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
+      : (<><div className="text-[26px] font-semibold leading-none" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
-      : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}</div>);
+      : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}</>)}</div>);
 }
 function Panel({ title, children }) {
   return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
@@ -511,7 +521,7 @@ function ExecutiveDashboard({ store, dir, org, range }) {
     const isMet = (o) => /appointment met/i.test(String(o || "")); // "Appointment Met" = attended
     const M = {};
     const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
-    oppRows.forEach((r) => { const k = key(r.owner); if (k) ensure(k).oppsCreated += 1; });
+    oppRows.forEach((r) => { const k = key(r.createdBy); if (k) ensure(k).oppsCreated += 1; });
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
     apptRows.forEach((r) => {
       const s = key(r.createdBy); if (s) { const e = ensure(s); e.apptsSet += 1; if (isMet(r.outcome)) e.setMet += 1; }        // setter
