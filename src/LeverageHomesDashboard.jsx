@@ -89,7 +89,21 @@ const DATASETS = {
     exclude: ["Appointment Type", "Lead Source", "Acquisition Associate"],
     schema: { name: "Opportunity Name", stage: "Stage", projected: "Projected Net Revenue",
       forecast: "Total Forecasted Revenue", closeDate: "Close Date" },
-    dedupe: (r) => r.name, dateField: "closeDate", repField: null,
+    dedupe: (r) => r.name, dateField: "closeDate", repField: null, companyScope: true, // no rep column — stays company-wide instead of blanking on drill
+  },
+  arip: { // ✔  Pipeline workbook — per-rep "Arips to Deal Review" tabs = deals that LEFT ARIP and where they went (New Value = destination)
+    workbook: "pipeline",
+    require: ["out of arip", "Acquisition Manager", "Edit Date"], exclude: [], tabInclude: /Arips to Deal Review/i, tabField: "__tab",
+    schema: { name: "Opportunity Name", stage: "Stage", rep: "Acquisition Manager", followUp: "Follow Up Specialist",
+      source: "Lead Source", projected: "Projected Net Revenue", newValue: "New Value", outArip: "out of arip", tab: "__tab" },
+    dedupe: null, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep", // final rep resolved in loadAll (needs directory for first→full-name)
+  },
+  arip_entered: { // ✔  Opportunities workbook — "Opps - ARIP - YTD": opps whose stage changed to Arip; shared credit across the deal team (like closed revenue)
+    workbook: "opportunities",
+    require: ["New Value", "Opportunity Owner", "Acquisition Manager"], exclude: [], tabInclude: /Opps - ARIP/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score" },
+    dedupe: (r) => `${r.id}|${r.date}`, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   appointments: { // ✔  Activities workbook — real appointment events
     workbook: "activities",
@@ -220,7 +234,10 @@ function makeGoogleClient(key) {
       }
       let rows = [], claimed = [];
       for (const [title, parsed] of Object.entries(cache[ds.workbook])) {
-        if (tabMatches(parsed.headers, ds, title)) { rows = rows.concat(parsed.rows); claimed.push(title); }
+        if (tabMatches(parsed.headers, ds, title)) {
+          const tabRows = ds.tabField ? parsed.rows.map((r) => ({ ...r, [ds.tabField]: title })) : parsed.rows; // carry the tab name when the rep lives in the tab, not a column
+          rows = rows.concat(tabRows); claimed.push(title);
+        }
       }
       return { rows, claimed };
     },
@@ -258,6 +275,17 @@ async function loadAll() {
     if (useGoogle && !rows.length)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
+  }
+  // ARIP rep = Acquisition Manager when present; otherwise derive from the tab's first name (VP/Follow-Up tabs leave AM blank).
+  if (store.arip) {
+    const first2full = {};
+    (store.directory || []).forEach((p) => { const f = String(p.rep || "").trim().split(/\s+/)[0].toLowerCase(); if (f && !first2full[f]) first2full[f] = String(p.rep).trim(); });
+    store.arip = dedupe(store.arip.map((r) => {
+      let rep = String(r.rep || "").trim();
+      if (!rep) { const f = String(r.tab || "").split("-").pop().trim().toLowerCase(); rep = first2full[f] || f; }
+      return { ...r, rep };
+    }), (r) => `${String(r.rep).trim()}|${r.name}|${r.newValue}|${r.date}`); // distinct exit events, not just rep|opp
+    if (useGoogle) console.log(`[arip] ${store.arip.length} rows after rep resolution`);
   }
   return { store, diagnostics, mode: useGoogle ? "google" : "mock" };
 }
@@ -436,6 +464,10 @@ const KPIS = {
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true,
+    agg: (rows) => rows.length }, // distinct opps whose stage moved to Arip; shared credit across the deal team
+  arip_dealreview: { id: "arip_dealreview", label: "ARIP → Deal Review", dataset: "arip", format: "number", higherIsBetter: true,
+    qualify: (r) => String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1, agg: (rows) => rows.length }, // advanced past ARIP
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing",
@@ -482,7 +514,7 @@ function computeKpi(kpi, store, dir, org, range) {
   const ds = DATASETS[kpi.dataset];
   // Datasets with no per-row rep can't honor a person/team/role filter — say so instead of showing a company-wide number.
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
-  if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing")
+  if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing" && !ds.companyScope)
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
   const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
@@ -493,7 +525,7 @@ function computeKpi(kpi, store, dir, org, range) {
     status = (kpi.higherIsBetter ? progress >= 1 : value <= target) ? "good"
       : (kpi.higherIsBetter ? progress >= 0.85 : value <= target * 1.15) ? "warn" : "bad";
   }
-  return { value, target, progress, variance, status, rows: filtered };
+  return { value, target, progress, variance, status, rows: filtered, companyWide: !!(ds.companyScope && peopleFilter) };
 }
 const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "currency") return (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
@@ -591,6 +623,7 @@ function KpiCard({ kpi, result }) {
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
+      : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
       : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}</>)}</div>);
 }
 function Panel({ title, children }) {
@@ -612,7 +645,7 @@ function Notes({ diagnostics, mode }) {
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
 
@@ -635,13 +668,17 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const apptRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
     const leadRows = applyFilters(store.leads_claimed || [], DATASETS.leads_claimed, ALL_ORG, range, dir);
     const deadRows = applyFilters(store.leads_deaded || [], DATASETS.leads_deaded, ALL_ORG, range, dir);
+    const aripRows = applyFilters(store.arip || [], DATASETS.arip, ALL_ORG, range, dir);
+    const enteredRows = applyFilters(store.arip_entered || [], DATASETS.arip_entered, ALL_ORG, range, dir);
     const key = (v) => String(v ?? "").trim();
     const isMet = (o) => /appointment met/i.test(String(o || "")); // "Appointment Met" = attended
     const M = {};
-    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, leadsClaimed: 0, leadsDeaded: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
+    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, leadsClaimed: 0, leadsDeaded: 0, oppsArip: 0, aripReview: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
     oppRows.forEach((r) => { const k = key(r.createdBy); if (k) ensure(k).oppsCreated += 1; });
     leadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsClaimed += 1; });
     deadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsDeaded += 1; });
+    enteredRows.forEach((r) => { const roles = new Set([r.owner, r.acqManager, r.acqManager2, r.followUp].map(key).filter(Boolean)); roles.forEach((k) => ensure(k).oppsArip += 1); });
+    aripRows.forEach((r) => { if (String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1) { const k = key(r.rep); if (k) ensure(k).aripReview += 1; } });
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
     apptRows.forEach((r) => {
       const s = key(r.createdBy); if (s) { const e = ensure(s); e.apptsSet += 1; if (isMet(r.outcome)) e.setMet += 1; }        // setter
@@ -719,13 +756,15 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
-          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Leads Claimed</th><th className="pb-2 font-medium text-right">Leads Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
+          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Leads Claimed</th><th className="pb-2 font-medium text-right">Leads Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
           <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
           <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Attend %</th></tr></thead>
         <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 font-medium">{row.rep}</td>
           <td className="py-2" style={{ color: T.sub }}>{row.role || "—"}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsArip.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.aripReview.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsClaimed.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsDeaded.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
