@@ -373,6 +373,7 @@ function applyFilters(rows, ds, org, range, dir) {
 const num = (v) => Number(v) || 0;
 const isQC = (r) => num(r.qc) === 1; // smrtPhone QC Y/N flag
 const isOpen = (s) => s && !/closed/i.test(s);
+const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", rep: "All" }; // date-only pass for per-rep scorecard
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "opps_closed", format: "currency",
     targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
@@ -499,13 +500,40 @@ function ExecutiveDashboard({ store, dir, org, range }) {
     const by = {}; results.closed_revenue.rows.forEach((o) => { const k = o.owner || "—"; (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1; });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
   }, [results.closed_revenue.rows, dir]);
-  const repActivity = useMemo(() => {
-    const by = {};
-    results.calls.rows.forEach((r) => { const k = r.rep || "—";
-      (by[k] = by[k] || { rep: k, minutes: 0, qcs: 0, calls: 0 });
-      by[k].minutes += num(r.durationMin); if (isQC(r)) by[k].qcs += 1; by[k].calls += 1; });
-    return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.rep]?.team })).sort((a, b) => b.minutes - a.minutes);
-  }, [results.calls.rows, dir]);
+  // Rep scorecard: 5 ready metrics, per rep, filter-aware. Appointments attribute two ways —
+  // Created By = setter (Appts Set), Assigned = attendee (Attended). Aggregated date-only (ALL_ORG)
+  // so grouping isn't pre-narrowed by the Assigned-based rep filter, then rep rows are scoped after.
+  const scorecard = useMemo(() => {
+    const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
+    const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
+    const apptRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
+    const key = (v) => String(v ?? "").trim();
+    const isMet = (o) => /appointment met/i.test(String(o || "")); // "Appointment Met" = attended
+    const M = {};
+    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
+    oppRows.forEach((r) => { const k = key(r.owner); if (k) ensure(k).oppsCreated += 1; });
+    callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
+    apptRows.forEach((r) => {
+      const s = key(r.createdBy); if (s) { const e = ensure(s); e.apptsSet += 1; if (isMet(r.outcome)) e.setMet += 1; }        // setter
+      const a = key(r.rep);       if (a) { const e = ensure(a); e.apptsAssigned += 1; if (isMet(r.outcome)) e.attended += 1; } // attendee
+    });
+    const scope = repsInScope(dir, org); // null => company-wide (show everyone)
+    const isVP = (role) => /vice\s*president|\bvp\b/i.test(String(role || ""));
+    return Object.values(M)
+      .filter((x) => !scope || scope.has(x.rep))
+      .map((x) => { const role = dir.byRep[x.rep]?.role, vp = isVP(role);
+        const attendeePrimary = vp || (x.apptsSet === 0 && x.apptsAssigned > 0); // VPs/closers scored on appts attended; setters (incl. anyone missing from the directory) on appts they set
+        const denom = attendeePrimary ? x.apptsAssigned : x.apptsSet, numer = attendeePrimary ? x.attended : x.setMet;
+        return { ...x, team: dir.byRep[x.rep]?.team, role, vp, attendeePrimary, shownAttended: attendeePrimary ? x.attended : x.setMet, rate: denom ? numer / denom : null }; })
+      .sort((a, b) => b.oppsCreated - a.oppsCreated || b.minutes - a.minutes);
+  }, [store, dir, org, range]);
+  // Appointment outcome mix (all outcomes as %), scoped normally by Assigned + period.
+  const outcomeMix = useMemo(() => {
+    const rows = applyFilters(store.appointments || [], DATASETS.appointments, org, range, dir);
+    const m = {}; rows.forEach((r) => { const o = String(r.outcome || "").trim() || "(blank)"; m[o] = (m[o] || 0) + 1; });
+    const total = rows.length || 1;
+    return { total: rows.length, items: Object.entries(m).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count) };
+  }, [store, org, range, dir]);
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} />)}</div>
@@ -538,17 +566,33 @@ function ExecutiveDashboard({ store, dir, org, range }) {
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))}</tbody>
       </table></Panel>
-    <Panel title="Rep activity (talk time &amp; QCs)">
+    <Panel title="Rep scorecard">
+      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Attendance % is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule.</div>
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
-          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Team</th>
-          <th className="pb-2 font-medium text-right">Talk Time</th><th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Calls</th></tr></thead>
-        <tbody>{repActivity.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
-          <td className="py-2 font-medium">{row.rep}</td><td className="py-2" style={{ color: T.sub }}>{row.team || "—"}</td>
+          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
+          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Talk Time</th>
+          <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
+          <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Attend %</th></tr></thead>
+        <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+          <td className="py-2 font-medium">{row.rep}</td>
+          <td className="py-2" style={{ color: T.sub }}>{row.role || "—"}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.calls.toLocaleString()}</td></tr>))}</tbody>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.shownAttended.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>))}</tbody>
       </table></Panel>
+    <Panel title="Appointment outcomes (all appointments in scope)">
+      <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
+      <div className="flex flex-col gap-2">{outcomeMix.items.map((o) => (
+        <div key={o.label} className="flex items-center gap-3">
+          <div className="text-[12px] shrink-0" style={{ width: 150, color: T.sub }}>{o.label}</div>
+          <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: /met/i.test(o.label) ? T.good : /no show|missed/i.test(o.label) ? T.bad : T.chart[3] }} /></div>
+          <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
+        </div>))}</div>
+    </Panel>
   </div>);
 }
 
