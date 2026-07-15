@@ -441,7 +441,7 @@ const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}
 function applyFilters(rows, ds, org, range, dir) {
   const fields = ds.repFields || (ds.repField ? [ds.repField] : null); // a rep can be credited through several role columns
   const reps = fields ? repsInScope(dir, org) : null;
-  const dateOn = !!(ds.dateField && rows.some((r) => r[ds.dateField])); // off until a date column exists
+  const dateOn = !!(range && ds.dateField && rows.some((r) => r[ds.dateField])); // off when no range is passed (period-independent charts) or no date column
   return rows.filter((row) => {
     if (reps && !fields.some((f) => reps.has(String(row[f] ?? "").trim()))) return false;
     if (dateOn) { const t = parseDate(row[ds.dateField]); if (!t || t < range.start || t > range.end) return false; }
