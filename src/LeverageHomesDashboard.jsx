@@ -146,7 +146,7 @@ function detectHeaderRow(values, hints) {
   return best;
 }
 function rowsToObjects(values, hints) {
-  if (!values.length) return [];
+  if (!values.length) return { headers: [], rows: [] };
   const hr = detectHeaderRow(values, hints);
   const headers = (values[hr] || []).map((h) => String(h).trim());
   return { headers, rows: values.slice(hr + 1)
@@ -155,7 +155,8 @@ function rowsToObjects(values, hints) {
 }
 // A tab belongs to a dataset if its headers include all `require` and no `exclude`.
 function tabMatches(headers, ds) {
-  return ds.require.every((h) => headers.includes(h)) && !ds.exclude.some((h) => headers.includes(h));
+  const h = headers || [];
+  return ds.require.every((x) => h.includes(x)) && !ds.exclude.some((x) => h.includes(x));
 }
 function makeGoogleClient(key) {
   const cache = {}; // workbook -> { title: {headers, rows} }
