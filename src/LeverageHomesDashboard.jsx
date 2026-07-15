@@ -595,16 +595,14 @@ function Select({ label, value, onChange, options }) {
       <option value="All">All</option>{options.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>);
 }
 function FilterBar({ org, setOrg, date, setDate, dir }) {
-  const CHAIN = ["company", "department", "team", "role", "rep"];
+  const CHAIN = ["company", "team", "rep"]; // Department & Role dropped — tabbed views + per-team breakouts cover them; they stay "All" in state
   const set = (k) => (v) => { const next = { ...org, [k]: v }; // changing a level clears everything below it
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex flex-wrap gap-3 items-end">
-      <Select label="Department" value={org.department} onChange={set("department")} options={opts.department} />
-      {org.department !== "All" && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
-      {org.team !== "All" && <Select label="Role" value={org.role} onChange={set("role")} options={opts.role} />}
-      {org.role !== "All" && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
+      <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />
+      <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />
       <div className="w-px self-stretch mx-1" style={{ background: T.border }} />
       <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Period</span>
         <select value={date.preset} onChange={(e) => setDate({ ...date, preset: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
