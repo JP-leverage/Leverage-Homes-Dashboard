@@ -22,7 +22,7 @@ import {
 const API_KEY =
   (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_SHEETS_API_KEY) ||
   (typeof window !== "undefined" && window.SHEETS_API_KEY) ||
-  "";
+  ""; // build-time env first (Vite inlines it); window fallback for artifact preview
 
 const T = {
   canvas: "#F6F7F9", card: "#FFFFFF", border: "#E6E9ED", ink: "#0F1B2D",
@@ -211,6 +211,13 @@ async function loadAll() {
     if (useGoogle && !rows.length)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
+    if (useGoogle && ds.dateField) {
+      const vals = store[key].map((r) => r[ds.dateField]);
+      const ok = vals.filter((v) => parseDate(v)).length;
+      const samples = [...new Set(vals.filter((v) => v != null && v !== ""))].slice(0, 6)
+        .map((v) => `${JSON.stringify(v)} (${typeof v})`);
+      console.log(`[${key}] date parse: ${ok}/${vals.length} ok · field="${ds.dateField}" · samples:`, samples);
+    }
   }
   return { store, diagnostics, mode: useGoogle ? "google" : "mock" };
 }
@@ -336,12 +343,16 @@ const rangeDays = (r) => Math.max(1, Math.round((r.end - r.start) / 86400000) + 
 // Handles M/D/YYYY (Coefficient default), ISO YYYY-MM-DD[ time], and Sheets serial numbers.
 function parseDate(v) {
   if (v == null || v === "") return null;
+  if (v instanceof Date) return isNaN(v) ? null : v;
   if (typeof v === "number") return new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
   const s = String(v).trim();
-  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3]; return new Date(+y, +m[1] - 1, +m[2]); }
-  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!s) return null;
+  // ISO first: YYYY-MM-DD (optionally with a time component after)
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  // US M/D/Y or M-D-Y, optionally followed by a time — no strict end anchor
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+  if (m) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; return new Date(y, +m[1] - 1, +m[2]); }
   const d = new Date(s); return isNaN(d) ? null : d;
 }
 const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : null; };
