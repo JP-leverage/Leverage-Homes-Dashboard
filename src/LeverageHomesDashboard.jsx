@@ -295,12 +295,14 @@ function buildDirectory(store) {
     role: distinct("role"), rep: people.length ? distinct("rep") : dataReps } };
 }
 function repsInScope(dir, org) {
-  if (!dir.people.length) return org.rep !== "All" ? new Set([org.rep]) : null; // pass-through
+  const noOrgFilter = org.company === "All" && org.department === "All" && org.team === "All" && org.role === "All" && org.rep === "All";
+  if (noOrgFilter) return null; // company-wide view: don't restrict by rep at all
+  if (!dir.people.length) return org.rep !== "All" ? new Set([String(org.rep).trim()]) : null; // pass-through
   const matched = dir.people.filter((p) =>
     (org.company === "All" || p.company === org.company) && (org.department === "All" || p.department === org.department) &&
     (org.team === "All" || p.team === org.team) && (org.role === "All" || p.role === org.role) &&
     (org.rep === "All" || p.rep === org.rep));
-  return new Set(matched.map((p) => p.rep));
+  return new Set(matched.map((p) => String(p.rep).trim())); // trim so "Sam Dogbe " matches data's "Sam Dogbe"
 }
 
 /* ============================================================================
@@ -358,7 +360,7 @@ function applyFilters(rows, ds, org, range, dir) {
   const reps = ds.repField ? repsInScope(dir, org) : null;
   const dateOn = !!(ds.dateField && rows.some((r) => r[ds.dateField])); // off until a date column exists
   return rows.filter((row) => {
-    if (reps && !reps.has(row[ds.repField])) return false;
+    if (reps && !reps.has(String(row[ds.repField] ?? "").trim())) return false;
     if (dateOn) { const t = parseDate(row[ds.dateField]); if (!t || t < range.start || t > range.end) return false; }
     return true;
   });
