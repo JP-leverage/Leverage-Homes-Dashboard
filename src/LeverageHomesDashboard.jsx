@@ -24,12 +24,21 @@ const API_KEY =
   (typeof window !== "undefined" && window.SHEETS_API_KEY) ||
   ""; // build-time env first (Vite inlines it); window fallback for artifact preview
 
-const T = {
-  canvas: "#F6F7F9", card: "#FFFFFF", border: "#E6E9ED", ink: "#0F1B2D",
-  sub: "#5B6675", faint: "#8A94A3", accent: "#127A56", accentSoft: "#E7F2ED",
-  good: "#127A56", warn: "#B45309", bad: "#BE123C", track: "#EEF1F4", warnSoft: "#FBF1E4",
-  chart: ["#127A56", "#2E9E78", "#5FB89A", "#0F1B2D", "#4A5A6E", "#93CDB8", "#B45309"],
+const THEMES = {
+  light: { // clean, bright — Leverage Homes marketing feel
+    canvas: "#F6F7F9", card: "#FFFFFF", border: "#E6E9ED", ink: "#0F1B2D",
+    sub: "#5B6675", faint: "#8A94A3", accent: "#127A56", accentSoft: "#E7F2ED",
+    good: "#127A56", warn: "#B45309", bad: "#BE123C", track: "#EEF1F4", warnSoft: "#FBF1E4",
+    chart: ["#127A56", "#2E9E78", "#5FB89A", "#0F1B2D", "#4A5A6E", "#93CDB8", "#B45309"],
+  },
+  dark: { // deep navy — Leverage Companies hero feel
+    canvas: "#0A0F1A", card: "#121A2A", border: "#25324A", ink: "#EAF1F8",
+    sub: "#A7B6C9", faint: "#6E7E93", accent: "#34C08C", accentSoft: "#123528",
+    good: "#34C08C", warn: "#E0A63E", bad: "#F2607F", track: "#1B2740", warnSoft: "#2A2214",
+    chart: ["#34C08C", "#5FD3A8", "#8FE3C4", "#7FA0C9", "#A7B6C9", "#2E9E78", "#E0A63E"],
+  },
 };
+let T = THEMES.light; // active theme — App reassigns from the mode toggle; every T.* read picks it up on re-render
 const FONT = { fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" };
 
 /* ============================================================================
@@ -412,7 +421,7 @@ const KPIS = {
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  leads: { id: "leads", label: "Leads", dataset: "leads", format: "number",
+  leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number",
     targetKey: "leads_claimed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
@@ -442,7 +451,7 @@ function computeKpi(kpi, store, dir, org, range) {
   const ds = DATASETS[kpi.dataset];
   // Datasets with no per-row rep can't honor a person/team/role filter — say so instead of showing a company-wide number.
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
-  if (!(ds.repField || ds.repFields) && peopleFilter)
+  if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing")
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
   const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
@@ -463,6 +472,38 @@ const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
 /* ============================================================================
  * components/*
  * ========================================================================== */
+// Cascading org options — each level is narrowed by the selections above it, so impossible combos can't be picked.
+function orgOptions(dir, org) {
+  const people = dir.people || [];
+  if (!people.length) return dir.options; // fallback to static lists (e.g. data-derived reps) when directory is empty
+  const uniq = (arr, f) => [...new Set(arr.map(f).filter(Boolean))].sort();
+  const match = (p, keys) => keys.every((k) => org[k] === "All" || p[k] === org[k]);
+  return {
+    company: uniq(people, (p) => p.company),
+    department: uniq(people.filter((p) => match(p, ["company"])), (p) => p.department),
+    team: uniq(people.filter((p) => match(p, ["company", "department"])), (p) => p.team),
+    role: uniq(people.filter((p) => match(p, ["company", "department", "team"])), (p) => p.role),
+    rep: uniq(people.filter((p) => match(p, ["company", "department", "team", "role"])), (p) => p.rep),
+  };
+}
+function ViewToggle({ view, setView }) {
+  const tabs = [["sales", "Sales"], ["marketing", "Marketing"]];
+  return (<div className="inline-flex rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+    {tabs.map(([v, l]) => (
+      <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3.5 py-1.5 rounded-md transition-colors"
+        style={{ background: view === v ? T.card : "transparent", color: view === v ? T.ink : T.sub, boxShadow: view === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+  </div>);
+}
+function ThemeToggle({ mode, setMode }) {
+  const dark = mode === "dark";
+  return (<button onClick={() => setMode(dark ? "light" : "dark")} title={dark ? "Switch to light mode" : "Switch to dark mode"}
+    className="flex items-center justify-center rounded-md" style={{ width: 30, height: 26, border: `1px solid ${T.border}`, color: T.sub, background: T.card }}>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {dark
+        ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>
+        : <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />}
+    </svg></button>);
+}
 function Select({ label, value, onChange, options }) {
   return (<label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</span>
     <select value={value} onChange={(e) => onChange(e.target.value)} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
@@ -470,14 +511,16 @@ function Select({ label, value, onChange, options }) {
       <option value="All">All</option>{options.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>);
 }
 function FilterBar({ org, setOrg, date, setDate, dir }) {
-  const set = (k) => (v) => setOrg({ ...org, [k]: v });
+  const CHAIN = ["company", "department", "team", "role", "rep"];
+  const set = (k) => (v) => { const next = { ...org, [k]: v }; // changing a level clears everything below it
+    for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
+  const opts = orgOptions(dir, org);
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex flex-wrap gap-3 items-end">
-      <Select label="Company" value={org.company} onChange={set("company")} options={dir.options.company} />
-      <Select label="Department" value={org.department} onChange={set("department")} options={dir.options.department} />
-      <Select label="Team" value={org.team} onChange={set("team")} options={dir.options.team} />
-      <Select label="Role" value={org.role} onChange={set("role")} options={dir.options.role} />
-      <Select label="Rep" value={org.rep} onChange={set("rep")} options={dir.options.rep} />
+      <Select label="Department" value={org.department} onChange={set("department")} options={opts.department} />
+      {org.department !== "All" && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
+      {org.team !== "All" && <Select label="Role" value={org.role} onChange={set("role")} options={opts.role} />}
+      {org.role !== "All" && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
       <div className="w-px self-stretch mx-1" style={{ background: T.border }} />
       <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Period</span>
         <select value={date.preset} onChange={(e) => setDate({ ...date, preset: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
@@ -496,9 +539,9 @@ function KpiCard({ kpi, result }) {
     <div className="flex items-start justify-between"><span className="text-[13px] font-medium" style={{ color: T.sub }}>{kpi.label}</span>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
     {result.unattributable
-      ? (<><div className="text-[26px] font-semibold leading-none" style={{ color: T.faint }}>n/a</div>
+      ? (<><div className="text-[28px] font-bold leading-none tracking-tight" style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
-      : (<><div className="text-[26px] font-semibold leading-none" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+      : (<><div className="text-[28px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
@@ -521,9 +564,11 @@ function Notes({ diagnostics, mode }) {
 /* ============================================================================
  * pages/ExecutiveDashboard.jsx
  * ========================================================================== */
-function ExecutiveDashboard({ store, dir, org, range }) {
-  const cards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
-  const results = useMemo(() => Object.fromEntries(cards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
+function ExecutiveDashboard({ store, dir, org, range, view }) {
+  const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "leads", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
+  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
 
   const byMonth = useMemo(() => { const m = {};
     results.closed_revenue.rows.forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
@@ -576,6 +621,11 @@ function ExecutiveDashboard({ store, dir, org, range }) {
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} />)}</div>
+    {isMktView ? (
+      <Panel title="Marketing view">
+        <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics. Per-rep sales views (revenue, pipeline, appointments, scorecard) are hidden here since Marketing has no individual reps in the directory. More marketing KPIs will land here as sources are wired.</div>
+      </Panel>
+    ) : (<>
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
       <Panel title="Closed revenue by month (Total Net Revenue)"><div style={{ height: 240 }}><ResponsiveContainer>
         <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
@@ -634,6 +684,7 @@ function ExecutiveDashboard({ store, dir, org, range }) {
           <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
         </div>))}</div>
     </Panel>
+    </>)}
   </div>);
 }
 
@@ -643,6 +694,9 @@ function ExecutiveDashboard({ store, dir, org, range }) {
 export default function App() {
   const [st, setSt] = useState({ loading: true, error: null, store: null, dir: null, diagnostics: [], mode: "mock" });
   const [org, setOrg] = useState({ company: "All", department: "All", team: "All", role: "All", rep: "All" });
+  const [view, setView] = useState("sales");
+  const [mode, setMode] = useState(() => (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
+  T = THEMES[mode]; // activate the chosen theme for this render pass (all T.* reads below use it)
   const [date, setDate] = useState({ preset: "this_year", start: "2026-01-01", end: iso(new Date()) });
   const range = useMemo(() => resolveRange(date.preset, date, new Date()), [date]);
 
@@ -658,7 +712,8 @@ export default function App() {
         <div><div className="text-[15px] font-semibold" style={{ color: T.ink }}>Leverage Homes</div><div className="text-[11px]" style={{ color: T.faint }}>Executive Dashboard</div></div></div>
       <div className="text-[11px] flex items-center gap-2" style={{ color: T.faint }}>
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
-        <span>{iso(range.start)} → {iso(range.end)}</span></div></div>
+        <span>{iso(range.start)} → {iso(range.end)}</span>
+        <ThemeToggle mode={mode} setMode={setMode} /></div></div>
     <div className="p-6 max-w-[1200px] mx-auto">{body}</div></div>);
 
   if (st.loading) return shell(<div className="text-sm" style={{ color: T.faint }}>Loading data…</div>);
@@ -667,9 +722,10 @@ export default function App() {
     <div className="mt-2" style={{ color: T.faint }}>Check the API key, that the Sheets API is enabled, and each workbook is shared “Anyone with the link → Viewer.”</div></div>);
 
   return shell(<>
+    <ViewToggle view={view} setView={setView} />
     <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} />
-    <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} />
+    <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} view={view} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
   </>);
 }
