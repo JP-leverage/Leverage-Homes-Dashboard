@@ -434,6 +434,16 @@ function repsInScope(dir, org) {
     (org.rep === "All" || p.rep === org.rep));
   return new Set(matched.map((p) => String(p.rep).trim())); // trim so "Sam Dogbe " matches data's "Sam Dogbe"
 }
+// Which role on a deal should get credit, based on the selected scope. VPs/closers → Opportunity Owner,
+// Follow-up → Follow Up Specialist, Acquisition → Acquisition Manager; otherwise (company/all) → Owner.
+function creditRole(org) {
+  const s = `${org.role || ""} ${org.team || ""}`.toLowerCase();
+  if (/vice\s*president|\bvp\b/.test(s)) return { field: "owner", label: "Vice President" };
+  if (/follow.?up/.test(s)) return { field: "followUp", label: "Follow-Up Specialist" };
+  if (/acqu/.test(s)) return { field: "acqManager", label: "Acquisition Manager" };
+  if (/listing/.test(s)) return { field: "owner", label: "Listing Partner" };
+  return { field: "owner", label: "Owner" };
+}
 
 /* ============================================================================
  * lib/dateRanges.js  — shared date vocabulary.
@@ -525,8 +535,8 @@ const KPIS = {
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length }, // distinct opps whose stage moved to Arip; broken out per AM
-  arip_dealreview: { id: "arip_dealreview", label: "ARIP → Deal Review", dataset: "arip", format: "number", higherIsBetter: true,
-    qualify: (r) => String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1, agg: (rows) => rows.length }, // advanced past ARIP
+  arip_dealreview: { id: "arip_dealreview", label: "Deals → Deal Review", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+    qualify: (r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim()), agg: (rows) => rows.length }, // out-of-ARIP report: opps that advanced to Deal Review / Pre Marketing; credited per rep via owner/AM/AM2/follow-up (AM in the breakout)
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
     targetKey: "arip_pullthrough", targetType: "rate",
     compute: (rows) => { if (!rows.length) return 0;
@@ -875,10 +885,18 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
     return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
   const drillLabel = org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : org.company !== "All" ? org.company : "All reps";
+  const credit = useMemo(() => creditRole(org), [org]);
   const leaderboard = useMemo(() => {
-    const by = {}; results.closed_revenue.rows.forEach((o) => { const k = o.owner || "—"; (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1; });
+    const scope = repsInScope(dir, org); // null => company-wide (show everyone)
+    const by = {};
+    results.closed_revenue.rows.forEach((o) => {
+      const k = String(o[credit.field] ?? "").trim();
+      if (!k) return;                     // no one in this role on the deal → not credited here
+      if (scope && !scope.has(k)) return; // only reps within the selected team/role/rep
+      (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1;
+    });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
-  }, [results.closed_revenue.rows, dir]);
+  }, [results.closed_revenue.rows, dir, org, credit]);
   // Rep scorecard: 5 ready metrics, per rep, filter-aware. Appointments attribute two ways —
   // Created By = setter (Appts Set), Assigned = attendee (Attended). Aggregated date-only (ALL_ORG)
   // so grouping isn't pre-narrowed by the Assigned-based rep filter, then rep rows are scoped after.
@@ -1064,9 +1082,9 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
-    {org.rep !== "All" ? (
+    {(org.rep !== "All" || org.team !== "All" || org.role !== "All" || org.department !== "All") ? (
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
-      <Panel title={`Deals · Close Date × Projected Rev — ${org.rep}`}><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -1074,7 +1092,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
-      <Panel title={`Deals · Stage × Projected Rev — ${org.rep}`}><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel title={`Deals · Stage × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -1084,9 +1102,9 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
     ) : (
-    <Panel title="Deals · by rep">
+    <Panel title="Deals · by scope">
       <div className="text-[13px] py-6 text-center" style={{ color: T.sub }}>
-        Deal breakdowns are rep-specific. Pick a rep in the filter bar to see their <b>Close Date × Projected Rev</b> and <b>Stage × Projected Rev</b> charts.
+        Deal breakdowns are scope-specific. Pick a <b>team</b> or <b>rep</b> in the filter bar to see the <b>Close Date × Projected Rev</b> and <b>Stage × Projected Rev</b> charts for them.
       </div>
     </Panel>
     )}
@@ -1107,16 +1125,17 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       </div>
       <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period.</div>
     </Panel>
-    <Panel title="Owner leaderboard (closed revenue)">
+    <Panel title={`${credit.label} leaderboard (closed revenue) — ${drillLabel}`}>
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
-          <th className="pb-2 font-medium">Owner</th><th className="pb-2 font-medium">Team</th>
+          <th className="pb-2 font-medium">{credit.label}</th><th className="pb-2 font-medium">Team</th>
           <th className="pb-2 font-medium text-right">Closed Revenue</th><th className="pb-2 font-medium text-right">Deals</th><th className="pb-2 font-medium text-right">Avg Deal</th></tr></thead>
-        <tbody>{leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+        <tbody>{leaderboard.length ? leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 font-medium">{row.owner}</td><td className="py-2" style={{ color: T.sub }}>{row.team || "—"}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))}</tbody>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
+          : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals credited to a {credit.label.toLowerCase()} in this scope.</td></tr>)}</tbody>
       </table></Panel>
     <Panel title="Rep scorecard">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
