@@ -633,10 +633,20 @@ function MoneyBars({ items, tint, fmtVal }) {
       <div className="text-[12px] text-right shrink-0" style={{ width: 96, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtVal ? fmtVal(o.value) : o.value.toLocaleString()}</div>
     </div>))}</div>);
 }
-
-/* ============================================================================
- * components/*
- * ========================================================================== */
+// Percent-first segmentation display (Core / Secondary / Exploratory). Blanks are excluded from the % and reported in the caption.
+function SegPctBars({ data, noun }) {
+  return (<>
+    <div className="flex flex-col gap-3 pt-1">
+      {data.items.map((x, i) => (
+        <div key={x.label} className="flex items-center gap-3">
+          <div className="text-[14px] shrink-0" style={{ width: 104, color: T.ink }}>{x.label}</div>
+          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(x.pct * 100)}%`, height: "100%", background: T.chart[i % T.chart.length] }} /></div>
+          <div className="text-[15px] font-semibold text-right shrink-0" style={{ width: 108, fontVariantNumeric: "tabular-nums", color: T.ink }}>{(x.pct * 100).toFixed(0)}% <span className="text-[12px] font-normal" style={{ color: T.faint }}>({x.value})</span></div>
+        </div>))}
+    </div>
+    <div className="text-[11px] mt-3" style={{ color: T.faint }}>% across Core / Secondary / Exploratory (segmented {noun} only). <b>{data.blank}</b> of {data.total} {noun} are unsegmented and excluded from the %.</div>
+  </>);
+}
 // Cascading org options — each level is narrowed by the selections above it, so impossible combos can't be picked.
 function orgOptions(dir, org) {
   const people = dir.people || [];
@@ -711,11 +721,18 @@ function KpiCard({ kpi, result, breakout, spark }) {
   const color = result.status === "good" ? T.good : result.status === "warn" ? T.warn : result.status === "bad" ? T.bad : T.faint;
   const pct = result.progress == null ? null : Math.min(1, Math.max(0, result.progress));
   const items = breakout && breakout.items ? breakout.items : null;
+  const custom = !!(breakout && breakout.custom);
   const bmax = items && items.length ? Math.max(...items.map((b) => b.value)) : 0;
-  const showSpark = spark && !(breakout && breakout.custom); // a custom breakout replaces the sparkline
+  const showSpark = spark && !custom; // a custom breakout replaces the sparkline
+  const live = !!(DATASETS[kpi.dataset] && DATASETS[kpi.dataset].dateField); // period-aware vs. running snapshot
+  const lower = kpi.higherIsBetter === false;
   return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-    <div className="flex items-start justify-between"><span className="text-[13px] font-medium" style={{ color: T.sub }}>{kpi.label}</span>
-      {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="text-[13px] font-medium truncate" style={{ color: T.sub }}>{kpi.label}</span>
+        <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: live ? T.accent : T.faint, background: live ? T.accentSoft : "transparent", border: live ? "none" : `1px solid ${T.border}` }}>{live ? "LIVE" : "SNAPSHOT"}</span>
+      </div>
+      {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
     {result.unattributable
       ? (<><div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
@@ -726,12 +743,21 @@ function KpiCard({ kpi, result, breakout, spark }) {
       : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
       : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}
     {showSpark && <div className="pt-1"><Sparkline data={spark} color={result.status === "bad" ? T.bad : T.accent} /></div>}
-    {items && items.length > 0 && (<div className="flex flex-col gap-1.5 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
-      {items.slice(0, 8).map((b) => (<div key={b.label} className="flex items-center gap-2">
-        <span className="text-[11px] shrink-0 truncate" style={{ width: 92, color: T.sub }} title={b.label}>{b.label}</span>
-        <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${bmax ? Math.round((b.value / bmax) * 100) : 0}%`, height: "100%", background: T.accent }} /></div>
-        <span className="text-[11px] text-right shrink-0" style={{ width: 60, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</span>
-      </div>))}
+    {items && items.length > 0 && (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+      {items.slice(0, 8).map((b) => {
+        const hasT = !custom && b.target != null && b.target > 0;
+        const hit = hasT ? (lower ? b.value <= b.target : b.value >= b.target) : null;
+        const barColor = hasT ? (hit ? T.good : T.bad) : T.accent;
+        const width = hasT ? Math.min(100, Math.round((b.value / b.target) * 100)) : (bmax ? Math.round((b.value / bmax) * 100) : 0);
+        return (<div key={b.label} className="flex items-center gap-2">
+          <span className="text-[11px] shrink-0 truncate" style={{ width: 84, color: T.sub }} title={b.label}>{b.label}</span>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: barColor }} /></div>
+          <div className="text-right shrink-0" style={{ width: 74 }}>
+            <div className="text-[11px] leading-tight" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
+            {hasT && <div className="text-[9px] leading-none" style={{ color: T.faint }}>/ {fmt(b.target, kpi.format)}</div>}
+          </div>
+        </div>);
+      })}
     </div>)}</>)}</div>);
 }
 function Panel({ title, children }) {
@@ -774,6 +800,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
     const out = {};
+    const tRows = store.targets || [];
+    const repTarget = (kpi, label) => { // that rep's own target for this KPI (Rep scope), scaled to the period like the tile target
+      if (!kpi.targetKey) return null;
+      const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
+      if (!hit) return null;
+      const base = num(hit.value);
+      return kpi.targetType === "rate" ? base : base * (rangeDays(range) / 30.4);
+    };
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
       if (!res || res.unattributable) { out[id] = null; return; }
@@ -788,12 +822,12 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       const groups = {};
       res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim(); if (r) (groups[r] = groups[r] || []).push(row); });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
-        value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows) }))
+        value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
       out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
-  }, [cards, results, dir]);
+  }, [cards, results, store, range, dir]);
   // Sparklines: monthly trend per volume/sum KPI (org-filtered, all periods). Skipped for averages, rates, and company-scope snapshots.
   const sparks = useMemo(() => {
     const out = {};
@@ -896,6 +930,13 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const apptsSegBySource = useMemo(() => breakdown(applyFilters(store.appts_seg || [], DATASETS.appts_seg, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const apptsSegBySegment = useMemo(() => {
     const rows = applyFilters(store.appts_seg || [], DATASETS.appts_seg, org, range, dir);
+    const order = ["Core", "Secondary", "Exploratory"]; const m = { Core: 0, Secondary: 0, Exploratory: 0 }; let blank = 0;
+    rows.forEach((r) => { const s = String(r.segment || "").trim(); if (order.includes(s)) m[s] += 1; else blank += 1; });
+    const named = order.reduce((a, k) => a + m[k], 0) || 1;
+    return { items: order.map((k) => ({ label: k, value: m[k], pct: m[k] / named })), blank, total: rows.length };
+  }, [store, org, range, dir]);
+  const oppsSegPct = useMemo(() => {
+    const rows = applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir);
     const order = ["Core", "Secondary", "Exploratory"]; const m = { Core: 0, Secondary: 0, Exploratory: 0 }; let blank = 0;
     rows.forEach((r) => { const s = String(r.segment || "").trim(); if (order.includes(s)) m[s] += 1; else blank += 1; });
     const named = order.reduce((a, k) => a + m[k], 0) || 1;
@@ -1009,21 +1050,11 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       </div>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Opps created by source"><Bars items={mktOppsBySource.items} tint={T.chart[3]} /></Panel>
-        <Panel title="Opps created by segmentation"><Bars items={mktOppsBySegment.items} tint={T.chart[4]} /></Panel>
+        <Panel title={`Opps created % by segment — ${drillLabel}`}><SegPctBars data={oppsSegPct} noun="opps" /></Panel>
       </div>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title={`Appts created by source — ${drillLabel}`}>{apptsSegBySource.items.length ? <Bars items={apptsSegBySource.items} tint={T.chart[2]} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No appointments for this scope.</div>}</Panel>
-        <Panel title={`Appts created % by segment — ${drillLabel}`}>
-          <div className="flex flex-col gap-3 pt-1">
-            {apptsSegBySegment.items.map((x, i) => (
-              <div key={x.label} className="flex items-center gap-3">
-                <div className="text-[14px] shrink-0" style={{ width: 104, color: T.ink }}>{x.label}</div>
-                <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(x.pct * 100)}%`, height: "100%", background: T.chart[i % T.chart.length] }} /></div>
-                <div className="text-[15px] font-semibold text-right shrink-0" style={{ width: 108, fontVariantNumeric: "tabular-nums", color: T.ink }}>{(x.pct * 100).toFixed(0)}% <span className="text-[12px] font-normal" style={{ color: T.faint }}>({x.value})</span></div>
-              </div>))}
-          </div>
-          <div className="text-[11px] mt-3" style={{ color: T.faint }}>% across Core / Secondary / Exploratory (segmented appointments only). <b>{apptsSegBySegment.blank}</b> of {apptsSegBySegment.total} appts are unsegmented and excluded from the %. Scoped to <b>{drillLabel}</b>.</div>
-        </Panel>
+        <Panel title={`Appts created % by segment — ${drillLabel}`}><SegPctBars data={apptsSegBySegment} noun="appts" /></Panel>
       </div>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title={`Forecasted pipeline by channel — ${drillLabel}`}>{mktPipeByChannel.length ? <MoneyBars items={mktPipeByChannel} tint={T.accent} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No open pipeline for this scope.</div>}</Panel>
