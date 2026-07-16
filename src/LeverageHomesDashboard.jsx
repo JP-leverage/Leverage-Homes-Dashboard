@@ -78,18 +78,18 @@ const DATASETS = {
     workbook: "opportunities",
     require: ["Total Net Revenue", "Close Date"], exclude: [],
     schema: { owner: "Opportunity Owner", name: "Opportunity Name", revenue: "Total Net Revenue",
-      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", closeDate: "Close Date" },
+      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", closeDate: "Close Date", txType: "Transaction Type" },
     // a rep is credited on a closed deal via ANY of these roles (owner / AM / AM2 / follow-up), not just owner
     dedupe: (r) => `${r.name}|${r.closeDate}`, dateField: "closeDate",
     repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
-  pipeline: { // ✔  forecast — open-stage Total Forecasted Revenue by Close Date
+  pipeline: { // ✔  "YTD x Pipeline Forecast" — one row per deal w/ owner, lead source, transaction type, forecasted+net rev, stage, close date
     workbook: "pipeline",
-    require: ["Stage", "Projected Net Revenue", "Total Forecasted Revenue"],
-    exclude: ["Appointment Type", "Lead Source", "Acquisition Associate"],
-    schema: { name: "Opportunity Name", stage: "Stage", projected: "Projected Net Revenue",
-      forecast: "Total Forecasted Revenue", closeDate: "Close Date" },
-    dedupe: (r) => r.name, dateField: "closeDate", repField: null, companyScope: true, // no rep column — stays company-wide instead of blanking on drill
+    require: ["Total Forecasted Revenue", "Opportunity Owner", "Lead Source"], exclude: [], tabInclude: /YTD x Pipeline Forecast/i,
+    schema: { name: "Opportunity Name", stage: "Stage", projected: "Projected Net Revenue", forecast: "Total Forecasted Revenue",
+      netRev: "Total Net Revenue", closeDate: "Close Date", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", source: "Lead Source", txType: "Transaction Type", segment: "Marketing Segmentation" },
+    dedupe: (r) => r.name, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"], // snapshot (no date filter); now per-rep & per-channel
   },
   arip: { // ✔  Pipeline workbook — per-rep "Arips to Deal Review" tabs = deals that LEFT ARIP and where they went (New Value = destination)
     workbook: "pipeline",
@@ -102,7 +102,7 @@ const DATASETS = {
     workbook: "opportunities",
     require: ["New Value", "Opportunity Owner", "Acquisition Manager"], exclude: [], tabInclude: /Opps - ARIP/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
-      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score" },
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score", txType: "Transaction Type" },
     dedupe: (r) => `${r.id}|${r.date}`, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   appt_funnel: { // ✔  Pipeline workbook — "Totals Appt To Arip": appointment→ARIP funnel (appt-type mix + which appts led to an ARIP). No appt date in export → appts are all-time.
@@ -455,10 +455,13 @@ function applyFilters(rows, ds, org, range, dir) {
 const num = (v) => Number(v) || 0;
 const isQC = (r) => num(r.qc) === 1; // smrtPhone QC Y/N flag
 const isOpen = (s) => s && !/closed/i.test(s);
+const groupSum = (rows, keyFn, valFn) => { const m = {}; rows.forEach((r) => { const k = keyFn(r); if (k) m[k] = (m[k] || 0) + valFn(r); }); return Object.entries(m).map(([label, value]) => ({ label, value })); };
+const txTypeOf = (r) => String(r.txType ?? "").trim();
 const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", rep: "All" }; // date-only pass for per-rep scorecard
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "opps_closed", format: "currency",
-    targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
+    targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0),
+    breakoutBy: (rows) => groupSum(rows, txTypeOf, (r) => num(r.revenue)) }, // splits by transaction type once that column is on the Closed Opps report; else falls back to team
   deals_closed: { id: "deals_closed", label: "Deals Closed", dataset: "opps_closed", format: "number",
     targetKey: "deals_closed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "opps_closed", format: "currency",
@@ -469,11 +472,16 @@ const KPIS = {
   opps_created: { id: "opps_created", label: "Opps Created", dataset: "opps_created", format: "number",
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
-    targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+    targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length,
+    breakoutBy: (rows) => groupSum(rows, (r) => String(r.eventType || "").replace(/ Appointment$/i, "").trim() || "(unset)", () => 1) },
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true,
-    agg: (rows) => rows.length }, // distinct opps whose stage moved to Arip; shared credit across the deal team
+    agg: (rows) => rows.length,
+    breakoutBy: (rows) => groupSum(rows, (r) => txTypeOf(r) || "(unset)", () => 1) }, // distinct opps whose stage moved to Arip; shared credit across the deal team
   arip_dealreview: { id: "arip_dealreview", label: "ARIP → Deal Review", dataset: "arip", format: "number", higherIsBetter: true,
     qualify: (r) => String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1, agg: (rows) => rows.length }, // advanced past ARIP
+  arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip", format: "percent", higherIsBetter: true,
+    compute: (rows) => { const left = rows.filter((r) => Number(r.outArip) === 1); if (!left.length) return 0;
+      return left.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / left.length; } }, // pulled through ÷ total that left ARIP
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing",
@@ -501,7 +509,8 @@ const KPIS = {
   talk_time: { id: "talk_time", label: "Total Talk Time", dataset: "calls", format: "minutes",
     targetKey: "talk_time", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, r) => s + num(r.durationMin), 0) },
   qcs: { id: "qcs", label: "Total QCs", dataset: "calls", format: "number",
-    targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length },
+    targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length,
+    breakoutBy: (rows) => { const q = rows.filter(isQC); const c = (m) => q.filter((r) => num(r.durationMin) >= m).length; return [{ label: "3+ min", value: c(3) }, { label: "5+ min", value: c(5) }, { label: "10+ min", value: c(10) }]; } },
 };
 function resolveTarget(kpi, store, org, range) {
   const rows = (store.targets || []).filter((t) => t.kpiId === kpi.targetKey);
@@ -629,7 +638,9 @@ function Sparkline({ data, color }) {
 function KpiCard({ kpi, result, breakout, spark }) {
   const color = result.status === "good" ? T.good : result.status === "warn" ? T.warn : result.status === "bad" ? T.bad : T.faint;
   const pct = result.progress == null ? null : Math.min(1, Math.max(0, result.progress));
-  const bmax = breakout && breakout.length ? Math.max(...breakout.map((b) => b.value)) : 0;
+  const items = breakout && breakout.items ? breakout.items : null;
+  const bmax = items && items.length ? Math.max(...items.map((b) => b.value)) : 0;
+  const showSpark = spark && !(breakout && breakout.custom); // a custom breakout replaces the sparkline
   return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-start justify-between"><span className="text-[13px] font-medium" style={{ color: T.sub }}>{kpi.label}</span>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
@@ -642,9 +653,9 @@ function KpiCard({ kpi, result, breakout, spark }) {
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
       : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
       : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}
-    {spark && <div className="pt-1"><Sparkline data={spark} color={result.status === "bad" ? T.bad : T.accent} /></div>}
-    {breakout && breakout.length > 0 && (<div className="flex flex-col gap-1.5 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
-      {breakout.slice(0, 3).map((b) => (<div key={b.label} className="flex items-center gap-2">
+    {showSpark && <div className="pt-1"><Sparkline data={spark} color={result.status === "bad" ? T.bad : T.accent} /></div>}
+    {items && items.length > 0 && (<div className="flex flex-col gap-1.5 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+      {items.slice(0, 3).map((b) => (<div key={b.label} className="flex items-center gap-2">
         <span className="text-[11px] shrink-0 truncate" style={{ width: 92, color: T.sub }} title={b.label}>{b.label}</span>
         <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${bmax ? Math.round((b.value / bmax) * 100) : 0}%`, height: "100%", background: T.accent }} /></div>
         <span className="text-[11px] text-right shrink-0" style={{ width: 60, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</span>
@@ -655,12 +666,24 @@ function Panel({ title, children }) {
   return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <h3 className="text-[13px] font-semibold mb-3" style={{ color: T.sub }}>{title}</h3>{children}</div>);
 }
-function Notes({ diagnostics, mode }) {
+function dataFreshness(store) {
+  const pick = [["opps_created", "Opps"], ["appointments", "Appts"], ["calls", "Calls"], ["leads_claimed", "Leads"], ["arip_entered", "ARIP"], ["opps_closed", "Closed"]];
+  const out = [];
+  pick.forEach(([k, label]) => {
+    const ds = DATASETS[k], rows = store[k] || [];
+    if (!ds || !ds.dateField || !rows.length) return;
+    let mx = null; rows.forEach((r) => { const d = parseDate(r[ds.dateField]); if (d && (!mx || d > mx)) mx = d; });
+    if (mx) out.push({ label, date: mx });
+  });
+  return out;
+}
+function Notes({ diagnostics, mode, freshness }) {
+  const fmtD = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
     <div className="text-[13px] font-semibold mb-1" style={{ color: T.warn }}>Data notes</div>
     <ul className="text-[12px] flex flex-col gap-1" style={{ color: T.ink }}>
       <li>Seven workbooks are wired: Opportunities, Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Context (directory). Date filtering is active on every dataset that carries a date column.</li>
-      <li><b>Leads Claimed</b> is now live per rep (New Value = claimer, counted by distinct lead on Edit Date). <b>Opps → ARIP</b> and <b>Targets</b> are the remaining open items — send the per-rep ARIP report and confirm the Targets tab to finish them.</li>
+      {freshness && freshness.length > 0 && <li><b>Data current through:</b> {freshness.map((f) => `${f.label} ${fmtD(f.date)}`).join("  ·  ")}. Workbooks sync on different schedules, so very recent windows (Today/Yesterday) can look sparse for a source that hasn't caught up — e.g. calls typically lag a day or two.</li>}
       {mode === "google" && diagnostics.map((d) => <li key={d.dataset} style={{ color: T.warn }}>⧗ {d.dataset}: {d.note}</li>)}
     </ul></div>);
 }
@@ -670,7 +693,7 @@ function Notes({ diagnostics, mode }) {
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   // Per-tile breakout: split each attributable KPI by the primary rep's team, reusing that KPI's own aggregation.
@@ -679,14 +702,20 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const out = {};
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
-      if (!res || res.unattributable || ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
+      if (!res || res.unattributable) { out[id] = null; return; }
+      // A KPI can define its own meaningful split (appt type, call length, transaction type…); use it if it yields data.
+      if (kpi.breakoutBy) {
+        const custom = kpi.breakoutBy(res.rows).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+        if (custom.length) { out[id] = { items: custom, custom: true }; return; }
+      }
+      if (ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
       const primary = ds.repField || ds.repFields[0];
       const groups = {};
       res.rows.forEach((row) => { const t = teamOf(row[primary]); if (t) (groups[t] = groups[t] || []).push(row); });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
         value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
-      out[id] = items.length ? items : null;
+      out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
   }, [cards, results, dir]);
@@ -917,7 +946,7 @@ export default function App() {
   return shell(<>
     <ViewToggle view={view} setView={setView} />
     <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} />
-    <Notes diagnostics={st.diagnostics} mode={st.mode} />
+    <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} view={view} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
   </>);
