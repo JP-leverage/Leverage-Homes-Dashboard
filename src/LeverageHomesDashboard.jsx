@@ -99,6 +99,15 @@ const DATASETS = {
       source: "Lead Source", projected: "Projected Net Revenue", newValue: "New Value", outArip: "out of arip", tab: "__tab" },
     dedupe: null, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep", // final rep resolved in loadAll (needs directory for first→full-name)
   },
+  arip_out_rev: { // ✔  Transactions workbook — out-of-ARIP report WITH revenue. Rev out of ARIP = Projected Net Revenue where New Value ∈ {Deal Review, Pre Marketing}.
+    workbook: "transactions",
+    require: ["New Value", "Opportunity Name"], exclude: [], tabInclude: /out of arip/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
+      txType: "Transaction Type", source: "Lead Source", segment: "Marketing Segmentation",
+      projNet: ["Projected Net Revenue", "Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"] }, // candidate revenue headers — first present wins
+    dedupe: null, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"], // running total; per team/role/rep
+  },
   arip_out: { // ✔  Pipeline workbook — "Opps - Out of ARIP - YTD": every opp that LEFT ARIP + where it went (New Value). Drives pull-through as a RUNNING TOTAL (no date filter).
     workbook: "pipeline",
     require: ["New Value", "Opportunity ID", "Follow Up Specialist"], exclude: [], tabInclude: /Opps - Out of ARIP/i,
@@ -134,18 +143,25 @@ const DATASETS = {
     schema: { name: "Opportunity Name", rep: "Created By", flag: "Deals to Arip", apptType: "Appointment Type", aripDate: "Arip Date" },
     dedupe: null, dateField: null, repField: "rep",
   },
-  appointments: { // ✔  Activities workbook — real appointment events
+  appointments: { // ✔  Activities workbook — real appointment events. Scoped to the per-rep MONTH tabs so we don't double-count the "Segment x Source" super-tab (same events).
     workbook: "activities",
-    require: ["Appointment Outcome", "Event Type"], exclude: [],
+    require: ["Appointment Outcome", "Event Type"], exclude: [], tabInclude: /Appointments YTD x Month/i,
     schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned",
       outcome: "Appointment Outcome", eventType: "Event Type" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy", // per-rep = the SETTER (Created By); Assigned is the attendee, handled in the scorecard
   },
-  appointments_attended: { // ✔  Same Activities events, but attributed to the ATTENDEE (Assigned) — drives Show Rate & Appointments Attended tiles (VP/closer view).
+  appointments_attended: { // ✔  Same Activities MONTH tabs, but attributed to the ATTENDEE (Assigned) — drives Show Rate & Appointments Attended tiles (VP/closer view).
     workbook: "activities",
-    require: ["Appointment Outcome", "Event Type"], exclude: [],
+    require: ["Appointment Outcome", "Event Type"], exclude: [], tabInclude: /Appointments YTD x Month/i,
     schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned", outcome: "Appointment Outcome", eventType: "Event Type" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep", // per-rep = the ATTENDEE (Assigned)
+  },
+  appts_seg: { // ✔  Activities workbook — "Appts YTD x Segment x Source" super-tab: appt events tagged with Lead Source + Marketing Segmentation. Drives appts-by-source + %-by-segment (Marketing view).
+    workbook: "activities",
+    require: ["Marketing Segmentation", "Opportunity Lead Source"], exclude: [], tabInclude: /Segment x Source/i,
+    schema: { name: "Opportunity Name", subject: "Subject", eventType: "Event Type", createdBy: "Created By",
+      outcome: "Appointment Outcome", rep: "Assigned", segment: "Marketing Segmentation", source: "Opportunity Lead Source" },
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy", // per-rep = the SETTER (Created By)
   },
   leads: { // ✔  Marketing workbook — the 5 per-source lead tabs (Call Center, Texting, Website, Direct Mail, PPL)
     workbook: "marketing",
@@ -288,7 +304,9 @@ function makeMockClient() {
  * ========================================================================== */
 function normalize(rows, ds) {
   return rows.map((row) => {
-    const o = {}; for (const f in ds.schema) o[f] = row[ds.schema[f]];
+    const o = {};
+    for (const f in ds.schema) { const h = ds.schema[f];
+      o[f] = Array.isArray(h) ? (h.map((k) => row[k]).find((v) => v != null && v !== "")) : row[h]; } // a field can list candidate headers; first non-empty wins
     if (ds.dateCandidates) for (const c of ds.dateCandidates) { const v = row[c]; if (v != null && v !== "") { o.date = v; break; } }
     return o;
   });
@@ -429,7 +447,7 @@ const eom = (d) => eod(new Date(d.getFullYear(), d.getMonth() + 1, 0));
 const soq = (d) => new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3, 1);
 const DATE_PRESETS = [["today", "Today"], ["yesterday", "Yesterday"], ["this_week", "This Week"], ["last_week", "Last Week"],
   ["this_month", "This Month"], ["last_month", "Last Month"], ["this_quarter", "This Quarter"], ["last_quarter", "Last Quarter"],
-  ["this_year", "This Year"], ["custom", "Custom Range"]];
+  ["this_year", "This Year"], ["full_year", "Full Year"], ["custom", "Custom Range"]];
 function resolveRange(preset, custom, now = new Date()) {
   switch (preset) {
     case "today": return { start: sod(now), end: eod(now) };
@@ -441,6 +459,7 @@ function resolveRange(preset, custom, now = new Date()) {
     case "this_quarter": return { start: soq(now), end: eod(now) };
     case "last_quarter": { const s = new Date(soq(now)); s.setMonth(s.getMonth() - 3); return { start: s, end: eom(new Date(s.getFullYear(), s.getMonth() + 2, 1)) }; }
     case "this_year": return { start: new Date(now.getFullYear(), 0, 1), end: eod(now) };
+    case "full_year": return { start: new Date(now.getFullYear(), 0, 1), end: eod(new Date(now.getFullYear(), 11, 31)) };
     case "custom": return { start: sod(new Date(custom.start)), end: eod(new Date(custom.end)) };
     default: return { start: som(now), end: eod(now) };
   }
@@ -493,6 +512,7 @@ const KPIS = {
   deals_closed: { id: "deals_closed", label: "Deals Closed", dataset: "opps_closed", format: "number", breakoutRep: "acqManager",
     targetKey: "deals_closed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "opps_closed", format: "currency", breakoutRep: "acqManager",
+    targetKey: "avg_deal", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, o) => s + num(o.revenue), 0) / rows.length : 0 },
   pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency",
     targetKey: "pipeline_forecast", targetType: "volume", higherIsBetter: true,
@@ -502,18 +522,24 @@ const KPIS = {
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+    targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length }, // distinct opps whose stage moved to Arip; broken out per AM
   arip_dealreview: { id: "arip_dealreview", label: "ARIP → Deal Review", dataset: "arip", format: "number", higherIsBetter: true,
     qualify: (r) => String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1, agg: (rows) => rows.length }, // advanced past ARIP
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
+    targetKey: "arip_pullthrough", targetType: "rate",
     compute: (rows) => { if (!rows.length) return 0;
       return rows.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / rows.length; } }, // positive (Deal Review/Pre Marketing) ÷ all that left ARIP
+  rev_out_of_arip: { id: "rev_out_of_arip", label: "Revenue Out of ARIP", dataset: "arip_out_rev", format: "currency", higherIsBetter: true,
+    targetKey: "rev_out_of_arip", targetType: "revenue", breakoutRep: "acqManager",
+    qualify: (r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim()), // only opps that advanced to Deal Review / Pre Marketing
+    agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) }, // sum of Projected Net Revenue
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length }, // VP metric
   appts_attended: { id: "appts_attended", label: "Appointments Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true,
     targetKey: "appts_attended", targetType: "volume",
     qualify: (r) => /met/i.test(String(r.outcome || "")) && !/no show|missed/i.test(String(r.outcome || "")), agg: (rows) => rows.length },
-  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, targetKey: "show_rate",
+  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, targetKey: "show_rate", targetType: "rate",
     compute: (rows) => { const scored = rows.filter((x) => { const o = String(x.outcome || "").trim(); return o && !/^no outcome$/i.test(o); });
       if (!scored.length) return 0; return scored.filter((x) => /met/i.test(x.outcome) && !/no show|missed/i.test(x.outcome)).length / scored.length; } },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
@@ -739,8 +765,8 @@ function Notes({ diagnostics, mode, freshness }) {
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
   const isTxView = view === "transactions";
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
-  const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough"]
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   // Per-tile breakout: split each attributable KPI by the primary rep's team, reusing that KPI's own aggregation.
@@ -803,9 +829,12 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
     return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
   const byStage = useMemo(() => { const m = {};
+    const SHORT = { "Closed in Accounting Reconciliation": "Closed · Acct Recon", "Investment Committee (IC)": "Investment Cmte", "Closed Won": "Closed Won", "Buyer ARIP": "Buyer ARIP", "Pre Closing": "Pre Closing", "Deals w/ Issues": "Deals w/ Issues" };
     applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
       .forEach((o) => { const s = String(o.stage || "").trim(); if (s) m[s] = (m[s] || 0) + num(o.forecast); });
-    return Object.entries(m).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value); }, [store, org, dir]);
+    let arr = Object.entries(m).map(([label, value]) => ({ label: SHORT[label] || label, value })).sort((a, b) => b.value - a.value);
+    if (arr.length > 9) { const head = arr.slice(0, 9), tail = arr.slice(9); head.push({ label: `Other (${tail.length})`, value: tail.reduce((s, x) => s + x.value, 0) }); arr = head; } // collapse the long tail so the chart stays readable
+    return arr; }, [store, org, dir]);
   const byCloseMonth = useMemo(() => { const m = {};
     applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
@@ -862,9 +891,19 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const mktLeadsBySegment = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.segment), [store, org, range, dir]);
   const mktOppsBySource   = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
+  // Appointments created (from the "Segment x Source" super-tab) — by lead source, and % split across Core/Secondary/Exploratory (blanks excluded from the %).
+  const apptsSegBySource = useMemo(() => breakdown(applyFilters(store.appts_seg || [], DATASETS.appts_seg, org, range, dir), (r) => r.source), [store, org, range, dir]);
+  const apptsSegBySegment = useMemo(() => {
+    const rows = applyFilters(store.appts_seg || [], DATASETS.appts_seg, org, range, dir);
+    const order = ["Core", "Secondary", "Exploratory"]; const m = { Core: 0, Secondary: 0, Exploratory: 0 }; let blank = 0;
+    rows.forEach((r) => { const s = String(r.segment || "").trim(); if (order.includes(s)) m[s] += 1; else blank += 1; });
+    const named = order.reduce((a, k) => a + m[k], 0) || 1;
+    return { items: order.map((k) => ({ label: k, value: m[k], pct: m[k] / named })), blank, total: rows.length };
+  }, [store, org, range, dir]);
   // Transactions: pipeline deals (open + closed) grouped by Transaction Type. Snapshot (no period filter); drills by rep/team via org.
+  const inClose = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); }; // deals whose Close Date falls in the selected period
   const txByType = useMemo(() => {
-    const rows = applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir);
+    const rows = applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => inClose(o.closeDate));
     const m = {};
     rows.forEach((o) => { const t = String(o.txType || "").trim() || "(unset)"; const closed = /closed|escrow|owned/i.test(String(o.stage || ""));
       const e = m[t] = m[t] || { type: t, deals: 0, forecast: 0, net: 0, closed: 0, open: 0 };
@@ -873,15 +912,15 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const totDeals = arr.reduce((s, x) => s + x.deals, 0) || 1, totFc = arr.reduce((s, x) => s + x.forecast, 0) || 1, totNet = arr.reduce((s, x) => s + x.net, 0);
     return { rows: arr.map((x) => ({ ...x, avg: x.deals ? x.forecast / x.deals : 0, pctDeals: x.deals / totDeals, pctFc: x.forecast / totFc })),
       totals: { deals: totDeals, forecast: totFc, net: totNet, avg: totFc / totDeals } };
-  }, [store, org, dir]);
-  // Median ARIP→Close duration (days) by transaction type, from the Transactions workbook. Blank durations (still open) excluded by median().
+  }, [store, org, range, dir]);
+  // Median ARIP→Close duration (days) by transaction type — deals that closed in the selected period (by Close Date). Blank durations (still open) excluded by median().
   const txMedians = useMemo(() => {
-    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir);
+    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
     const m = {};
     rows.forEach((r) => { const t = String(r.txType || "").trim() || "(unset)"; (m[t] = m[t] || []).push(num(r.duration)); });
     return Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), closed: arr.filter((n) => n > 0).length, total: arr.length }))
       .filter((x) => x.total > 0).sort((a, b) => a.value - b.value);
-  }, [store, org, dir]);
+  }, [store, org, range, dir]);
   // Per-channel revenue (Total Forecasted Revenue), split open pipeline vs closed, from the pipeline deals tab.
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
   const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage)),
@@ -901,15 +940,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
               <div className="text-[26px] font-bold text-right shrink-0" style={{ width: 140, fontVariantNumeric: "tabular-nums", color: T.ink }}>{Math.round(x.value)} <span className="text-[13px] font-normal" style={{ color: T.faint }}>days</span></div>
             </div>); })}
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
-        <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across closed deals of each type; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
+        <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
-      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}><div style={{ height: 300 }}><ResponsiveContainer>
-        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 52, left: 10, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
+      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
+        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
-          <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={150} />
+          <YAxis type="category" dataKey="label" tick={{ fontSize: 12, fill: T.sub }} axisLine={false} tickLine={false} width={168} interval={0} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={T.accent} maxBarSize={22}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 11, fill: T.sub }} /></Bar>
         </BarChart></ResponsiveContainer></div>
         <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
@@ -945,7 +983,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
             </tr>
           </tbody>
         </table></div>
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Live snapshot of all open + closed deals (period filter doesn't apply). Revenue uses <b>Total Forecasted Revenue</b>. Scoped to <b>{drillLabel}</b> — a single <b>rep</b> filter narrows this; team filters touch most deals (each has both an AM and a VP).</div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Deals with a <b>Close Date in the selected period</b>. Revenue uses <b>Total Forecasted Revenue</b>. Scoped to <b>{drillLabel}</b> — a single <b>rep</b> filter narrows this; team filters touch most deals (each has both an AM and a VP).</div>
       </Panel>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title={`Deals by transaction type — ${drillLabel}`}><div style={{ height: 190 }}><ResponsiveContainer>
@@ -971,6 +1009,20 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Opps created by source"><Bars items={mktOppsBySource.items} tint={T.chart[3]} /></Panel>
         <Panel title="Opps created by segmentation"><Bars items={mktOppsBySegment.items} tint={T.chart[4]} /></Panel>
+      </div>
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Panel title={`Appts created by source — ${drillLabel}`}>{apptsSegBySource.items.length ? <Bars items={apptsSegBySource.items} tint={T.chart[2]} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No appointments for this scope.</div>}</Panel>
+        <Panel title={`Appts created % by segment — ${drillLabel}`}>
+          <div className="flex flex-col gap-3 pt-1">
+            {apptsSegBySegment.items.map((x, i) => (
+              <div key={x.label} className="flex items-center gap-3">
+                <div className="text-[14px] shrink-0" style={{ width: 104, color: T.ink }}>{x.label}</div>
+                <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(x.pct * 100)}%`, height: "100%", background: T.chart[i % T.chart.length] }} /></div>
+                <div className="text-[15px] font-semibold text-right shrink-0" style={{ width: 108, fontVariantNumeric: "tabular-nums", color: T.ink }}>{(x.pct * 100).toFixed(0)}% <span className="text-[12px] font-normal" style={{ color: T.faint }}>({x.value})</span></div>
+              </div>))}
+          </div>
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>% across Core / Secondary / Exploratory (segmented appointments only). <b>{apptsSegBySegment.blank}</b> of {apptsSegBySegment.total} appts are unsegmented and excluded from the %. Scoped to <b>{drillLabel}</b>.</div>
+        </Panel>
       </div>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title={`Forecasted pipeline by channel — ${drillLabel}`}>{mktPipeByChannel.length ? <MoneyBars items={mktPipeByChannel} tint={T.accent} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No open pipeline for this scope.</div>}</Panel>
