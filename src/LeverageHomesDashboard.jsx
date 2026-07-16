@@ -98,6 +98,14 @@ const DATASETS = {
       source: "Lead Source", projected: "Projected Net Revenue", newValue: "New Value", outArip: "out of arip", tab: "__tab" },
     dedupe: null, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep", // final rep resolved in loadAll (needs directory for first→full-name)
   },
+  arip_out: { // ✔  Pipeline workbook — "Opps - Out of ARIP - YTD": every opp that LEFT ARIP + where it went (New Value). Drives pull-through as a RUNNING TOTAL (no date filter).
+    workbook: "pipeline",
+    require: ["New Value", "Opportunity ID", "Follow Up Specialist"], exclude: [], tabInclude: /Opps - Out of ARIP/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
+      txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation" },
+    dedupe: null, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"], // running total; per-rep & per-channel capable
+  },
   arip_entered: { // ✔  Opportunities workbook — "Opps - ARIP - YTD": opps whose stage changed to Arip; shared credit across the deal team (like closed revenue)
     workbook: "opportunities",
     require: ["New Value", "Opportunity Owner", "Acquisition Manager"], exclude: [], tabInclude: /Opps - ARIP/i,
@@ -479,9 +487,9 @@ const KPIS = {
     breakoutBy: (rows) => groupSum(rows, (r) => txTypeOf(r) || "(unset)", () => 1) }, // distinct opps whose stage moved to Arip; shared credit across the deal team
   arip_dealreview: { id: "arip_dealreview", label: "ARIP → Deal Review", dataset: "arip", format: "number", higherIsBetter: true,
     qualify: (r) => String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1, agg: (rows) => rows.length }, // advanced past ARIP
-  arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip", format: "percent", higherIsBetter: true,
-    compute: (rows) => { const left = rows.filter((r) => Number(r.outArip) === 1); if (!left.length) return 0;
-      return left.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / left.length; } }, // pulled through ÷ total that left ARIP
+  arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
+    compute: (rows) => { if (!rows.length) return 0;
+      return rows.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / rows.length; } }, // positive (Deal Review/Pre Marketing) ÷ all that left ARIP
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing",
@@ -580,7 +588,7 @@ function orgOptions(dir, org) {
   };
 }
 function ViewToggle({ view, setView }) {
-  const tabs = [["sales", "Sales"], ["marketing", "Marketing"]];
+  const tabs = [["sales", "Sales"], ["marketing", "Marketing"], ["transactions", "Transactions"]];
   return (<div className="inline-flex rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}` }}>
     {tabs.map(([v, l]) => (
       <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3.5 py-1.5 rounded-md transition-colors"
@@ -693,8 +701,10 @@ function Notes({ diagnostics, mode, freshness }) {
  * ========================================================================== */
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
+  const isTxView = view === "transactions";
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
-  const cards = allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
+  const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast"]
+    : allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   // Per-tile breakout: split each attributable KPI by the primary rep's team, reusing that KPI's own aggregation.
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
@@ -762,6 +772,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
     return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
+  const drillLabel = org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : org.company !== "All" ? org.company : "All reps";
   const leaderboard = useMemo(() => {
     const by = {}; results.closed_revenue.rows.forEach((o) => { const k = o.owner || "—"; (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1; });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
@@ -813,10 +824,75 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const mktLeadsBySegment = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.segment), [store, org, range, dir]);
   const mktOppsBySource   = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
+  // Transactions: pipeline deals (open + closed) grouped by Transaction Type. Snapshot (no period filter); drills by rep/team via org.
+  const txByType = useMemo(() => {
+    const rows = applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir);
+    const m = {};
+    rows.forEach((o) => { const t = String(o.txType || "").trim() || "(unset)"; const closed = /closed|escrow|owned/i.test(String(o.stage || ""));
+      const e = m[t] = m[t] || { type: t, deals: 0, forecast: 0, net: 0, closed: 0, open: 0 };
+      e.deals += 1; e.forecast += num(o.forecast); e.net += num(o.netRev); closed ? e.closed++ : e.open++; });
+    const arr = Object.values(m).sort((a, b) => b.forecast - a.forecast);
+    const totDeals = arr.reduce((s, x) => s + x.deals, 0) || 1, totFc = arr.reduce((s, x) => s + x.forecast, 0) || 1, totNet = arr.reduce((s, x) => s + x.net, 0);
+    return { rows: arr.map((x) => ({ ...x, avg: x.deals ? x.forecast / x.deals : 0, pctDeals: x.deals / totDeals, pctFc: x.forecast / totFc })),
+      totals: { deals: totDeals, forecast: totFc, net: totNet, avg: totFc / totDeals } };
+  }, [store, org, dir]);
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>
-    {isMktView ? (<>
+    {isTxView ? (<>
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Panel title={`Deals by transaction type — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+          <BarChart data={txByType.rows.map((x) => ({ label: x.type, value: x.deals }))} layout="vertical" margin={{ top: 0, right: 40, left: 10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={132} />
+            <Tooltip cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+            <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" style={{ fontSize: 11, fill: T.sub }} />{txByType.rows.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
+          </BarChart></ResponsiveContainer></div></Panel>
+        <Panel title={`Forecasted revenue by transaction type — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+          <BarChart data={txByType.rows.map((x) => ({ label: x.type, value: x.forecast }))} layout="vertical" margin={{ top: 0, right: 52, left: 10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
+            <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={132} />
+            <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+            <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{txByType.rows.map((_, i) => <Cell key={i} fill={T.accent} />)}</Bar>
+          </BarChart></ResponsiveContainer></div></Panel>
+      </div>
+      <Panel title={`Transaction summary — ${drillLabel}`}>
+        <div style={{ overflowX: "auto" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse" }}>
+          <thead><tr style={{ color: T.faint, textAlign: "right" }}>
+            {["Transaction type", "Deals", "Open", "Closed", "Forecasted rev", "Net rev", "Avg (forecast)", "% deals", "% rev"].map((h, i) => (
+              <th key={h} className="py-2 px-2" style={{ textAlign: i === 0 ? "left" : "right", borderBottom: `1px solid ${T.border}` }}>{h}</th>))}
+          </tr></thead>
+          <tbody>
+            {txByType.rows.map((x) => (
+              <tr key={x.type} style={{ color: T.ink }}>
+                <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600 }}>{x.type}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{x.deals}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.open}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.closed}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.forecast, "currency")}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(x.net, "currency")}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.avg, "currency")}</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctDeals * 100).toFixed(0)}%</td>
+                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctFc * 100).toFixed(0)}%</td>
+              </tr>))}
+            <tr style={{ color: T.ink, fontWeight: 700 }}>
+              <td className="py-2 px-2">Total</td>
+              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{txByType.totals.deals}</td>
+              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.open, 0)}</td>
+              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.closed, 0)}</td>
+              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.forecast, "currency")}</td>
+              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.net, "currency")}</td>
+              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.avg, "currency")}</td>
+              <td className="py-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
+              <td className="py-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
+            </tr>
+          </tbody>
+        </table></div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Live snapshot of all open + closed deals in the pipeline (period filter doesn't apply). Revenue uses <b>Total Forecasted Revenue</b>. Scoped to <b>{drillLabel}</b> — pick a team or rep to drill in.</div>
+      </Panel>
+    </>) : isMktView ? (<>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
         <Panel title="Leads by marketing segmentation"><Bars items={mktLeadsBySegment.items} tint={T.chart[1]} /></Panel>
@@ -829,8 +905,9 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
+    {org.rep !== "All" ? (
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
-      <Panel title="Deals · Close Date × Projected Rev (Total Forecasted Revenue)"><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel title={`Deals · Close Date × Projected Rev — ${org.rep}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -838,7 +915,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
-      <Panel title="Deals · Stage × Projected Rev (Total Forecasted Revenue)"><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel title={`Deals · Stage × Projected Rev — ${org.rep}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -847,7 +924,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
-    <Panel title="Closed revenue by month (actual Total Net Revenue · all periods)"><div style={{ height: 200 }}><ResponsiveContainer>
+    ) : (
+    <Panel title="Deals · by rep">
+      <div className="text-[13px] py-6 text-center" style={{ color: T.sub }}>
+        Deal breakdowns are rep-specific. Pick a rep in the filter bar to see their <b>Close Date × Projected Rev</b> and <b>Stage × Projected Rev</b> charts.
+      </div>
+    </Panel>
+    )}
+    <Panel title={`Closed revenue by month — ${drillLabel} (Total Net Revenue · all months)`}><div style={{ height: 200 }}><ResponsiveContainer>
       <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -855,14 +939,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
       </BarChart></ResponsiveContainer></div></Panel>
-    <Panel title="Appt Set → ARIP (appointment funnel)">
+    <Panel title={`Appt Set → ARIP — ${drillLabel} (appointment funnel)`}>
       <Bars items={apptFunnel.items} tint={T.chart[2]} />
       <div className="grid gap-3 mt-3 pt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)", borderTop: `1px solid ${T.border}` }}>
         {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
           <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
             <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
       </div>
-      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period. Filter to a rep to see just their funnel.</div>
+      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period.</div>
     </Panel>
     <Panel title="Owner leaderboard (closed revenue)">
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
