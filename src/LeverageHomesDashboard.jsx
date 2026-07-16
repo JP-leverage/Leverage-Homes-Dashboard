@@ -199,12 +199,12 @@ const DATASETS = {
       rep: "Edited By", oldValue: "Old Value", newValue: "New Value" },
     dedupe: (r) => `${String(r.rep).trim()}|${r.leadId}`, dateField: "date", dateCandidates: ["Edit Date"], repField: "rep",
   },
-  calls: { // ✔  Tasks workbook — call logs / talk time
+  calls: { // ✔  Tasks workbook — "Talk Time YTD x Month - <rep>" tabs. One row per call record → calls = row count; talk_time = sum of minutes; qcs = rows where QC flag = 1.
     workbook: "tasks",
-    require: ["Task", "Assigned", "Status"], exclude: [],
+    require: ["Assigned", "smrtPhone Call Duration (Minutes)"], exclude: [], tabInclude: /Talk Time/i,
     schema: { account: "Company / Account", subject: "Subject", rep: "Assigned", status: "Status", task: "Task",
       durationMin: "smrtPhone Call Duration (Minutes)", qc: "smrtPhone QC Y/N" },
-    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date", "Completed Date", "Date"], repField: "rep",
+    dedupe: null, dateField: "date", dateCandidates: ["Date", "Created Date", "Create Date", "Completed Date"], repField: "rep",
   },
   directory: { // ✔  Context workbook — org source of truth
     workbook: "context",
@@ -279,7 +279,8 @@ function makeGoogleClient(key) {
         const titles = await listTabs(wb.id, key);
         const raw = await batchGet(wb.id, titles, key);
         const parsed = {};
-        const hints = [...ds.require, ...Object.values(ds.schema)];
+        const hints = Array.from(new Set(Object.values(DATASETS).flatMap((d) =>
+          [...d.require, ...Object.values(d.schema).flatMap((h) => (Array.isArray(h) ? h : [h]))]))); // score header rows against EVERY dataset's headers — a workbook's cache is shared across datasets, so first-dataset-only hints can mis-detect another dataset's header row (e.g. Talk Time tabs under the contracts_sent load)
         for (const t of titles) parsed[t] = rowsToObjects(raw[t] || [], hints);
         cache[ds.workbook] = parsed;
       }
