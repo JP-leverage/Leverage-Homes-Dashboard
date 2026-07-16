@@ -54,6 +54,7 @@ const WORKBOOKS = {
   marketing:     { id: "1lkftyL4-_kX-hxHXQZ_ylwPlFQg2wYJBXXHE2bzN4wc", title: "Homes Dashboard PT1 (Marketing)" },
   tasks:         { id: "1Vs-IMKBDW3FilFSM8gQKo1NqSgUqh0aVPhFPb4wGOPE", title: "Homes Dashboard Pt 1 (Tasks)" },
   leads_wb:      { id: "1iS4PLBML63qWqpgWwxRH83jFVw7TJ9SAlHK06JQ2MmI", title: "Homes Dashboard Pt 1 (Leads)" },
+  transactions:  { id: "1nMLGx8PSvq1aSx6GAOCtaieNIiSEHHezNS-NxjkEH3w", title: "Homes Dashboard PT1 (Transactions)" },
 };
 
 /* ============================================================================
@@ -105,6 +106,20 @@ const DATASETS = {
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation" },
     dedupe: null, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"], // running total; per-rep & per-channel capable
+  },
+  tx_duration: { // ✔  Transactions workbook — "Median Duration <type> x YTD" tabs: one row per closed deal w/ Duration ARIP to Closed (days). Blank duration = not yet closed.
+    workbook: "transactions",
+    require: ["Duration ARIP to Closed", "Transaction Type", "Arip Date"], exclude: [], tabInclude: /Median Duration/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", txType: "Transaction Type", aripDate: "Arip Date",
+      closeDate: "Close Date", duration: "Duration ARIP to Closed", owner: "Opportunity Owner",
+      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist" },
+    dedupe: (r) => r.id, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"], // snapshot; per-rep via deal team
+  },
+  contracts_sent: { // ✔  Tasks workbook — "Contracts Sent x YTD - <VP>" tabs (VP-only). One row per contract sent (flag=Yes), keyed to the VP owner.
+    workbook: "tasks",
+    require: ["Contract Sent", "Date of Contract Sent", "Opportunity Owner"], exclude: [], tabInclude: /Contracts Sent/i,
+    schema: { name: "Opportunity Name", owner: "Opportunity Owner", aripDate: "Arip Date", flag: "Contract Sent", aripCount: "Arip Count", date: "Date of Contract Sent" },
+    dedupe: null, dateField: "date", dateCandidates: ["Date of Contract Sent"], repField: "owner",
   },
   arip_entered: { // ✔  Opportunities workbook — "Opps - ARIP - YTD": opps whose stage changed to Arip; shared credit across the deal team (like closed revenue)
     workbook: "opportunities",
@@ -490,6 +505,8 @@ const KPIS = {
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
     compute: (rows) => { if (!rows.length) return 0;
       return rows.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / rows.length; } }, // positive (Deal Review/Pre Marketing) ÷ all that left ARIP
+  contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true,
+    targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length }, // VP metric
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing", // marketing funnel volume — only shown in the Marketing team view
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing",
@@ -567,6 +584,17 @@ function Bars({ items, tint }) {
       <div className="text-[12px] shrink-0" style={{ width: 160, color: T.sub }}>{o.label}</div>
       <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: tint || T.accent }} /></div>
       <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
+    </div>))}</div>);
+}
+const median = (arr) => { const s = arr.filter((n) => n > 0).sort((a, b) => a - b); if (!s.length) return 0; const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// Bars whose value is money (or any raw number) — width relative to the max, right-label formatted.
+function MoneyBars({ items, tint, fmtVal }) {
+  const max = Math.max(1, ...items.map((o) => o.value));
+  return (<div className="flex flex-col gap-2">{items.map((o) => (
+    <div key={o.label} className="flex items-center gap-3">
+      <div className="text-[12px] shrink-0" style={{ width: 150, color: T.sub }}>{o.label}</div>
+      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((o.value / max) * 100)}%`, height: "100%", background: tint || T.accent }} /></div>
+      <div className="text-[12px] text-right shrink-0" style={{ width: 96, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtVal ? fmtVal(o.value) : o.value.toLocaleString()}</div>
     </div>))}</div>);
 }
 
@@ -702,7 +730,7 @@ function Notes({ diagnostics, mode, freshness }) {
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing"; // driven by the Sales/Marketing view toggle, not an org filter
   const isTxView = view === "transactions";
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast"]
     : allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
@@ -836,6 +864,20 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     return { rows: arr.map((x) => ({ ...x, avg: x.deals ? x.forecast / x.deals : 0, pctDeals: x.deals / totDeals, pctFc: x.forecast / totFc })),
       totals: { deals: totDeals, forecast: totFc, net: totNet, avg: totFc / totDeals } };
   }, [store, org, dir]);
+  // Median ARIP→Close duration (days) by transaction type, from the Transactions workbook. Blank durations (still open) excluded by median().
+  const txMedians = useMemo(() => {
+    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir);
+    const m = {};
+    rows.forEach((r) => { const t = String(r.txType || "").trim() || "(unset)"; (m[t] = m[t] || []).push(num(r.duration)); });
+    return Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), closed: arr.filter((n) => n > 0).length, total: arr.length }))
+      .filter((x) => x.total > 0).sort((a, b) => a.value - b.value);
+  }, [store, org, dir]);
+  // Per-channel revenue (Total Forecasted Revenue), split open pipeline vs closed, from the pipeline deals tab.
+  const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
+  const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage)),
+    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, dir]);
+  const mktClosedByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => isClosedStage(o.stage)),
+    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, dir]);
 
   return (<div className="flex flex-col gap-5">
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>
@@ -892,6 +934,11 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         </table></div>
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>Live snapshot of all open + closed deals in the pipeline (period filter doesn't apply). Revenue uses <b>Total Forecasted Revenue</b>. Scoped to <b>{drillLabel}</b> — pick a team or rep to drill in.</div>
       </Panel>
+      <Panel title={`Median days · ARIP → Close by transaction type — ${drillLabel}`}>
+        {txMedians.length ? <MoneyBars items={txMedians.map((x) => ({ label: `${x.label} (${x.closed} closed)`, value: x.value }))} tint={T.chart[1]} fmtVal={(v) => `${Math.round(v)} days`} />
+          : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across closed deals of each type; still-open deals are excluded. Scoped to <b>{drillLabel}</b>.</div>
+      </Panel>
     </>) : isMktView ? (<>
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
@@ -900,6 +947,10 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Panel title="Opps created by source"><Bars items={mktOppsBySource.items} tint={T.chart[3]} /></Panel>
         <Panel title="Opps created by segmentation"><Bars items={mktOppsBySegment.items} tint={T.chart[4]} /></Panel>
+      </div>
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Panel title={`Forecasted pipeline by channel — ${drillLabel}`}>{mktPipeByChannel.length ? <MoneyBars items={mktPipeByChannel} tint={T.accent} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No open pipeline for this scope.</div>}</Panel>
+        <Panel title={`Closed revenue by channel — ${drillLabel}`}>{mktClosedByChannel.length ? <MoneyBars items={mktClosedByChannel} tint={T.good} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed revenue for this scope.</div>}</Panel>
       </div>
       <Panel title="Marketing view">
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
@@ -960,13 +1011,13 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))}</tbody>
       </table></Panel>
     <Panel title="Rep scorecard">
-      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Attendance % is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule.</div>
+      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
           <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Leads Claimed</th><th className="pb-2 font-medium text-right">Leads Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
           <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
-          <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Attend %</th></tr></thead>
+          <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Show Rate</th></tr></thead>
         <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 font-medium">{row.rep}</td>
           <td className="py-2" style={{ color: T.sub }}>{row.role || "—"}</td>
