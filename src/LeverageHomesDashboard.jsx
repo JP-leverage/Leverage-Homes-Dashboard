@@ -58,7 +58,7 @@ function stlPriority(icpRaw, source) {
   if (!isNaN(icp) && icp >= 1 && icp <= 3) return "Low";
   return STL_PREMIUM.test(String(source || "")) ? "High" : "Low"; // icp absent/0 -> source decides
 }
-function stlStartRaw(row, scenario) { return /new leads/i.test(scenario) ? (row.createdDate ?? row.editDate) : row.editDate; }
+function stlStartRaw(row, scenario) { return /new leads/i.test(scenario) ? row.createdTime : row.editDate; }
 function stlBucket(startDate) {
   const d = parseDateTime(startDate); if (!d) return null;
   const day = d.getDay(); if (day === 0 || day === 6) return "weekend"; // weekend wins first
@@ -241,8 +241,9 @@ const DATASETS = {
     require: ["Speed to Lead Claimed Date & Time", "Lead Source"], exclude: [],
     tabInclude: /Speed to Lead X YTD/i, tabField: "__tab",
     schema: {
-      id: ["Lead ID", "Opportunity ID"], name: ["Company", "Opportunity Name"],
-      claimed: "Speed to Lead Claimed Date & Time", editDate: "Edit Date", createdDate: "Created Date",
+      id: ["Lead ID", "Opportunity ID"], name: ["Company / Account", "Company", "Opportunity Name"],
+      claimed: "Speed to Lead Claimed Date & Time", editDate: "Edit Date",
+      createdTime: "Created time", createdDate: "Create Date",
       icp: ["Total Tier 1 ICP", "Total ICP Score"], source: "Lead Source",
       newValue: "New Value", tab: "__tab",
     },
@@ -688,16 +689,17 @@ function Select({ label, value, onChange, options }) {
       style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
       <option value="All">All</option>{options.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>);
 }
-function FilterBar({ org, setOrg, date, setDate, dir }) {
+function FilterBar({ org, setOrg, date, setDate, dir, view }) {
   const CHAIN = ["company", "team", "rep"];
   const set = (k) => (v) => { const next = { ...org, [k]: v };
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
+  const showRepFilters = view !== "speedtolead" && view !== "marketing"; // Team/Rep are inert in those views
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex flex-wrap gap-3 items-end">
-      <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />
-      <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />
-      <div className="w-px self-stretch mx-1" style={{ background: T.border }} />
+      {showRepFilters && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
+      {showRepFilters && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
+      {showRepFilters && <div className="w-px self-stretch mx-1" style={{ background: T.border }} />}
       <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Period</span>
         <select value={date.preset} onChange={(e) => setDate({ ...date, preset: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
           style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>{DATE_PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
@@ -789,12 +791,16 @@ function Notes({ diagnostics, mode, freshness }) {
     </ul></div>);
 }
 
+const stlHasTime = (v) => /\d\s*:\s*\d/.test(String(v || "")); // true only if a clock time is present
 function stlRows(store, range) {
   // normalize + tag scenario, priority, bucket, elapsed; apply period filter on start.
-  const out = [];
+  const out = []; const noTime = {}; // scenario -> count of rows dropped for a date-only start
   (store.speed_to_lead || []).forEach((r) => {
     const scenario = stlScenario(r.tab);
     const startRaw = stlStartRaw(r, scenario);
+    // A date-only start (no clock time) can't be placed in a time-of-day bucket or timed accurately
+    // (it would anchor to midnight). Drop it and report the count instead of fabricating an elapsed.
+    if (!stlHasTime(startRaw)) { noTime[scenario] = (noTime[scenario] || 0) + 1; return; }
     const start = parseDateTime(startRaw), claim = parseDateTime(r.claimed);
     if (!start || !claim) return;
     const elapsed = (claim - start) / 1000; // seconds
@@ -803,6 +809,7 @@ function stlRows(store, range) {
     out.push({ scenario, priority: stlPriority(r.icp, r.source), bucket: stlBucket(startRaw),
       source: String(r.source || "").trim() || "(unset)", elapsed });
   });
+  out.noTime = noTime; // attached for the view to surface
   return out;
 }
 function stlAgg(rows) { // pooled avg + median across the given rows
@@ -811,43 +818,54 @@ function stlAgg(rows) { // pooled avg + median across the given rows
 }
 function StlHero({ title, caption, rows, big }) {
   const a = stlAgg(rows);
-  const groupAvg = (key, order) => {
-    const m = {}; rows.forEach((r) => { const k = r[key]; if (!k) return; (m[k] = m[k] || []).push(r.elapsed); });
-    let items = Object.entries(m).map(([label, arr]) => ({ label, value: mean(arr), n: arr.length }));
+  const groupMed = (key, order) => {
+    const m = {}; rows.forEach((r) => { const k = r[key] || "(unset)"; (m[k] = m[k] || []).push(r.elapsed); });
+    let items = Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), n: arr.length }));
     if (order) items = items.sort((x, y) => order.indexOf(x.label) - order.indexOf(y.label));
-    else items = items.sort((x, y) => x.value - y.value);
+    else items = items.sort((x, y) => y.value - x.value); // longest on top
     return items;
   };
-  const max = (items) => Math.max(1, ...items.map((i) => i.value));
-  const Row = ({ label, value, n, mx }) => (
-    <div className="flex items-center gap-3">
-      <div className="text-[12px] shrink-0" style={{ width: big ? 150 : 120, color: T.sub }}>{label} <span style={{ color: T.faint }}>({n})</span></div>
-      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((value / mx) * 100)}%`, height: "100%", background: T.accent }} /></div>
-      <div className="text-[12px] text-right shrink-0" style={{ width: 78, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtDur(value)}</div>
+  const scen = groupMed("scenario", null), prio = groupMed("priority", ["High", "Low"]), chan = groupMed("source", null);
+  const globalMax = Math.max(1, ...[...scen, ...prio, ...chan].map((i) => i.value)); // one scale across the whole hero
+  const THIN = 3; // fewer than this many leads = not enough to trust
+  const Row = ({ label, value, n }) => {
+    const thin = n < THIN;
+    return (<div className="flex items-center gap-3" style={{ opacity: thin ? 0.45 : 1 }}>
+      <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({n})</span></div>
+      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((value / globalMax) * 100)}%`, height: "100%", background: thin ? T.faint : T.accent }} /></div>
+      <div className="text-[12px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: T.ink }}>{fmtDur(value)}</div>
     </div>);
-  const scen = groupAvg("scenario", STL_SCENARIOS), prio = groupAvg("priority", ["High", "Low"]), chan = groupAvg("source");
+  };
+  const Section = ({ label, items }) => (
+    <div><div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: T.faint }}>{label}</div>
+      <div className="flex flex-col gap-1.5">{items.map((i) => <Row key={i.label} {...i} />)}</div></div>);
   return (
     <div className="rounded-xl p-5 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
       <div className="flex items-center gap-2">
         <span className="text-[13px] font-medium" style={{ color: T.sub }}>{title}</span>
         <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
       </div>
-      <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.avg)}</div>
+      <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
       <div className="text-[11px]" style={{ color: T.faint }}>{caption}</div>
-      <div className="text-[11px]" style={{ color: T.faint }}>avg · median {fmtDur(a.med)} · {a.n.toLocaleString()} leads</div>
-      {big && a.n > 0 && (<div className="flex flex-col gap-4 pt-3 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
-        <div><div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: T.faint }}>By scenario</div><div className="flex flex-col gap-2">{scen.map((i) => <Row key={i.label} {...i} mx={max(scen)} />)}</div></div>
-        <div><div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: T.faint }}>By priority</div><div className="flex flex-col gap-2">{prio.map((i) => <Row key={i.label} {...i} mx={max(prio)} />)}</div></div>
-        <div><div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: T.faint }}>By channel</div><div className="flex flex-col gap-2">{chan.map((i) => <Row key={i.label} {...i} mx={max(chan)} />)}</div></div>
+      <div className="text-[11px]" style={{ color: T.faint }}>median · avg {fmtDur(a.avg)} · {a.n.toLocaleString()} leads</div>
+      {big && a.n > 0 && (<div className="flex flex-col gap-5 pt-3 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+        <Section label="By scenario" items={scen} />
+        <Section label="By priority" items={prio} />
+        <Section label="By channel" items={chan} />
+        <div className="text-[10px]" style={{ color: T.faint }}>Bars show median time-to-claim, scaled to one shared axis. Greyed rows have fewer than {THIN} leads — too few to read into.</div>
       </div>)}
     </div>);
 }
 function SpeedToLeadView({ store, range }) {
   const rows = useMemo(() => stlRows(store, range), [store, range]);
   const b = (name) => rows.filter((r) => r.bucket === name);
+  const noTime = rows.noTime || {};
+  const noTimeMsg = Object.entries(noTime).filter(([, n]) => n > 0).map(([s, n]) => `${s} (${n})`).join(", ");
   return (
     <div className="flex flex-col gap-5">
-      <StlHero big title="Speed to Lead" caption="Avg time from lead in → claimed · leads received weekdays 10am–7pm (the accountable window)" rows={b("primary")} />
+      {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
+        <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
+      <StlHero big title="Speed to Lead" caption="Median time from lead in → claimed · leads received weekdays 10am–7pm (the accountable window)" rows={b("primary")} />
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <StlHero title="Out of Window" caption="Leads received weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
         <StlHero title="Weekend" caption="Leads received Saturday & Sunday — context, not scored" rows={b("weekend")} />
@@ -1247,7 +1265,7 @@ export default function App() {
 
   return shell(<>
     <ViewToggle view={view} setView={setView} />
-    <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} />
+    <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} view={view} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
