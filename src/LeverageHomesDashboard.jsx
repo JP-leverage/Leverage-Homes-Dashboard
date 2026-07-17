@@ -542,20 +542,23 @@ const sow = (d) => { const x = sod(d); return addDays(x, -(((x.getDay() - WEEK_S
 const som = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
 const eom = (d) => eod(new Date(d.getFullYear(), d.getMonth() + 1, 0));
 const soq = (d) => new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3, 1);
+const eoq = (d) => eod(new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3 + 3, 0));
+const eoy = (d) => eod(new Date(d.getFullYear(), 11, 31));
+const eow = (d) => eod(addDays(sow(d), 6));
 const DATE_PRESETS = [["today", "Today"], ["yesterday", "Yesterday"], ["this_week", "This Week"], ["last_week", "Last Week"],
   ["this_month", "This Month"], ["last_month", "Last Month"], ["this_quarter", "This Quarter"], ["last_quarter", "Last Quarter"],
   ["this_year", "This Year"], ["full_year", "Full Year"], ["custom", "Custom Range"]];
-function resolveRange(preset, custom, now = new Date()) {
+function resolveRange(preset, custom, now = new Date(), forward = false) {
   switch (preset) {
     case "today": return { start: sod(now), end: eod(now) };
     case "yesterday": { const y = addDays(now, -1); return { start: sod(y), end: eod(y) }; }
-    case "this_week": return { start: sow(now), end: eod(now) };
+    case "this_week": return { start: sow(now), end: forward ? eow(now) : eod(now) };
     case "last_week": { const s = addDays(sow(now), -7); return { start: s, end: eod(addDays(s, 6)) }; }
-    case "this_month": return { start: som(now), end: eod(now) };
+    case "this_month": return { start: som(now), end: forward ? eom(now) : eod(now) };
     case "last_month": { const s = new Date(now.getFullYear(), now.getMonth() - 1, 1); return { start: s, end: eom(s) }; }
-    case "this_quarter": return { start: soq(now), end: eod(now) };
+    case "this_quarter": return { start: soq(now), end: forward ? eoq(now) : eod(now) };
     case "last_quarter": { const s = new Date(soq(now)); s.setMonth(s.getMonth() - 3); return { start: s, end: eom(new Date(s.getFullYear(), s.getMonth() + 2, 1)) }; }
-    case "this_year": return { start: new Date(now.getFullYear(), 0, 1), end: eod(now) };
+    case "this_year": return { start: new Date(now.getFullYear(), 0, 1), end: forward ? eoy(now) : eod(now) };
     case "full_year": return { start: new Date(now.getFullYear(), 0, 1), end: eod(new Date(now.getFullYear(), 11, 31)) };
     case "custom": return { start: sod(new Date(custom.start)), end: eod(new Date(custom.end)) };
     default: return { start: som(now), end: eod(now) };
@@ -610,7 +613,7 @@ const KPIS = {
   avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "avg_deal", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, o) => s + num(o.revenue), 0) / rows.length : 0 },
-  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency",
+  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency", forwardDate: true,
     targetKey: "pipeline_forecast", targetType: "volume", higherIsBetter: true,
     agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
   opps_created: { id: "opps_created", label: "Opps Created", dataset: "opps_created", format: "number",
@@ -1089,7 +1092,7 @@ function ApptRoleSection({ store, dir, org, range }) {
   return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
 }
 
-function ExecutiveDashboard({ store, dir, org: rawOrg, range, view }) {
+function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
   const isMktView = view === "marketing";
@@ -1110,7 +1113,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, view }) {
   const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
-  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
+  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, KPIS[id].forwardDate ? rangeFwd : range)])), [store, dir, org, range, rangeFwd]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
     const out = {};
@@ -1556,6 +1559,7 @@ export default function App() {
   T = THEMES[mode];
   const [date, setDate] = useState({ preset: "this_year", start: "2026-01-01", end: iso(new Date()) });
   const range = useMemo(() => resolveRange(date.preset, date, new Date()), [date]);
+  const rangeFwd = useMemo(() => resolveRange(date.preset, date, new Date(), true), [date]); // pipeline forecast spans the full selected period (deals close in the future)
 
   useEffect(() => { let alive = true;
     (async () => { try { const { store, diagnostics, mode } = await loadAll();
@@ -1582,7 +1586,7 @@ export default function App() {
     <ViewToggle view={view} setView={setView} />
     <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} view={view} />
+    <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
   </>);
 }
