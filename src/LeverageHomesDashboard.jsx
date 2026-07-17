@@ -110,7 +110,7 @@ const DATASETS = {
     schema: { name: "Opportunity Name", stage: "Stage", projected: "Projected Net Revenue", forecast: "Total Forecasted Revenue",
       netRev: "Total Net Revenue", closeDate: "Close Date", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", source: "Lead Source", txType: "Transaction Type", segment: "Marketing Segmentation" },
-    dedupe: (r) => r.name, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: (r) => r.name, dateField: "closeDate", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   arip: {
     workbook: "pipeline",
