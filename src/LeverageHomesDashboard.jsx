@@ -1153,7 +1153,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       // On the unfiltered All view, lagging KPIs get a role-sectioned breakout: each deal is
       // credited to everyone who touched it (owner/VP, AM & follow-up), bucketed by the owner's
       // actual directory role. Sections overlap and don't sum to the headline (labeled in-card).
-      if (LAGGING.has(id) && !orgFiltered && ds.repFields) {
+      if (ds.repFields && !orgFiltered) {
         const ROLE_FIELDS = ds.repFields; // e.g. ["owner","acqManager","acqManager2","followUp"]
         const buckets = {}; // rep -> rows[] (multi-credit)
         res.rows.forEach((row) => {
