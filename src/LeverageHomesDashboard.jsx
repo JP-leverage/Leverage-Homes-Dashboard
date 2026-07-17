@@ -228,16 +228,25 @@ const DATASETS = {
   opps_assigned: {
     workbook: "opportunities_pt2",
     require: [], exclude: [], tabInclude: /Opps Assigned x YTD/i, tabField: "__tab",
-    schema: { id: "Opportunity ID", name: "Opportunity Name", tab: "__tab" },
+    schema: { id: "Opportunity ID", name: "Opportunity Name", createdBy: "Created By", tab: "__tab" },
     dedupe: (r) => (r.id ? `${r.tab}|${r.id}` : null), dateField: "date",
-    dateCandidates: ["Created Date", "Create Date", "Date Created", "Edit Date"], repField: "rep",
+    dateCandidates: ["Created Date", "Create Date"], repField: "rep",
   },
   opps_deaded: {
     workbook: "opportunities_pt2",
     require: [], exclude: [], tabInclude: /Opportunities Deaded x YTD/i, tabField: "__tab",
-    schema: { id: "Opportunity ID", name: "Opportunity Name", tab: "__tab" },
+    schema: { id: "Opportunity ID", name: "Opportunity Name", editedBy: "Edited By", tab: "__tab" },
     dedupe: (r) => (r.id ? `${r.tab}|${r.id}` : null), dateField: "date",
-    dateCandidates: ["Created Date", "Create Date", "Date Created", "Edit Date"], repField: "rep",
+    dateCandidates: ["Edit Date", "Edited Date"], repField: "rep",
+  },
+  closed_opps: {
+    workbook: "opportunities_pt2",
+    require: [], exclude: [], tabInclude: /Closed Opps x YTD/i,
+    schema: { id: "Opportunity ID", owner: "Opportunity Owner", name: "Opportunity Name",
+      revenue: ["Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"], acqManager: "Acquisition Manager",
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", closeDate: "Close Date", txType: "Transaction Type" },
+    dedupe: (r) => (r.id != null && r.id !== "" ? String(r.id) : null), dateField: "closeDate",
+    repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   live_transfers: {
     workbook: "leads_wb",
@@ -579,11 +588,11 @@ const groupSum = (rows, keyFn, valFn) => { const m = {}; rows.forEach((r) => { c
 const txTypeOf = (r) => String(r.txType ?? "").trim();
 const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", rep: "All" };
 const KPIS = {
-  closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "opps_closed", format: "currency", breakoutRep: "acqManager",
+  closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
-  deals_closed: { id: "deals_closed", label: "Deals Closed", dataset: "opps_closed", format: "number", breakoutRep: "acqManager",
+  deals_closed: { id: "deals_closed", label: "Deals Closed", dataset: "closed_opps", format: "number", breakoutRep: "acqManager",
     targetKey: "deals_closed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "opps_closed", format: "currency", breakoutRep: "acqManager",
+  avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "avg_deal", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, o) => s + num(o.revenue), 0) / rows.length : 0 },
   pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency",
@@ -643,13 +652,13 @@ const KPIS = {
   qcs: { id: "qcs", label: "Total QCs", dataset: "calls", format: "number",
     targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length,
     breakoutBy: (rows) => { const q = rows.filter(isQC); const c = (m) => q.filter((r) => num(r.durationMin) >= m).length; return [{ label: "3+ min", value: c(3) }, { label: "5+ min", value: c(5) }, { label: "10+ min", value: c(10) }]; } },
-  opps_assigned: { id: "opps_assigned", label: "Opps Assigned", dataset: "opps_assigned", format: "number", breakoutRep: "rep",
+  opps_assigned: { id: "opps_assigned", label: "Opps Assigned", dataset: "opps_assigned", format: "number", breakoutRep: "createdBy",
     targetKey: "opps_assigned", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  opps_deaded: { id: "opps_deaded", label: "Opps Deaded", dataset: "opps_deaded", format: "number", breakoutRep: "rep",
+  opps_deaded: { id: "opps_deaded", label: "Opps Deaded", dataset: "opps_deaded", format: "number", breakoutRep: "editedBy",
     targetKey: "opps_deaded", targetType: "volume", higherIsBetter: false, agg: (rows) => rows.length },
-  live_transfers_attempted: { id: "live_transfers_attempted", label: "Live Transfers Attempted", dataset: "live_transfers", format: "number",
+  live_transfers_attempted: { id: "live_transfers_attempted", label: "Live Transfers Attempted", dataset: "live_transfers", format: "number", domain: "marketing",
     targetKey: "live_transfers_attempted", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.attempted), agg: (rows) => rows.length },
-  live_transfers_connected: { id: "live_transfers_connected", label: "Live Transfers Connected", dataset: "live_transfers", format: "number",
+  live_transfers_connected: { id: "live_transfers_connected", label: "Live Transfers Connected", dataset: "live_transfers", format: "number", domain: "marketing",
     targetKey: "live_transfers_connected", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.connected), agg: (rows) => rows.length },
 };
 function resolveTarget(kpi, store, org, range) {
@@ -944,13 +953,99 @@ function SpeedToLeadView({ store, range }) {
     </div>);
 }
 
+// Role-aware appointment stats. Setter axis = "Created By"; attendee axis = "Assigned".
+// scored = has a real outcome; met = attended (appointment met, not no-show/missed).
+function apptStats(store, dir, range) {
+  const rows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
+  const key = (v) => String(v ?? "").trim();
+  const scored = (o) => { const s = key(o.outcome).toLowerCase(); return !!s && s !== "no outcome"; };
+  const met = (o) => /met/i.test(key(o.outcome)) && !/no show|missed/i.test(key(o.outcome));
+  const S = {}, A = {};
+  rows.forEach((o) => {
+    const setter = key(o.createdBy), att = key(o.rep), sc = scored(o), mt = met(o);
+    if (setter) { const e = S[setter] = S[setter] || { rep: setter, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
+      if (att) { const b = e.by[att] = e.by[att] || { label: att, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
+    if (att) { const e = A[att] = A[att] || { rep: att, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
+      if (setter) { const b = e.by[setter] = e.by[setter] || { label: setter, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
+  });
+  return { S, A };
+}
+function ApptCard({ title, bigText, caption, items, kind }) {
+  const max = kind === "count" ? Math.max(1, ...items.map((i) => i.value)) : 1;
+  return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+    <div className="flex items-center gap-1.5">
+      <span className="text-[13px] font-medium truncate" style={{ color: T.sub }}>{title}</span>
+      <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
+    </div>
+    <div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{bigText}</div>
+    <span className="text-[11px]" style={{ color: T.faint }}>{caption}</span>
+    {items.length > 0 ? (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+      {items.slice(0, 8).map((it) => (
+        <div key={it.label} className="flex items-center gap-2">
+          <span className="text-[11px] shrink-0 truncate" style={{ width: 96, color: T.sub }} title={it.label}>{it.label}</span>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${kind === "count" ? Math.round((it.value / max) * 100) : Math.round((it.pct || 0) * 100)}%`, height: "100%", background: T.accent }} /></div>
+          <div className="text-[11px] text-right shrink-0" style={{ width: 52, fontVariantNumeric: "tabular-nums", color: T.ink }}>{kind === "count" ? it.value.toLocaleString() : (it.pct == null ? "—" : (it.pct * 100).toFixed(0) + "%")}</div>
+        </div>))}
+    </div>) : <span className="text-[11px]" style={{ color: T.faint }}>No appointments in scope</span>}
+  </div>);
+}
+function ApptRoleSection({ store, dir, org, range }) {
+  const { S, A } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
+  const inDir = useMemo(() => directorySet(dir), [dir]);
+  const isVPrep = (rep) => /vice\s*president|\bvp\b/i.test(String(dir.byRep[String(rep).trim()]?.role || ""));
+  const scope = repsInScope(dir, org);
+  const inScope = (rep) => (!scope || scope.has(rep)) && (!inDir || inDir.has(rep));
+  const single = org.rep !== "All";
+  const vpScope = isVpScope(dir, org);
+  const noOrg = org.team === "All" && org.rep === "All" && org.role === "All" && org.department === "All" && org.company === "All";
+  const rateOf = (e) => (e.scored ? e.met / e.scored : null);
+
+  const groupCard = (members, metric, groupLabel, noun, keyp) => {
+    const totMet = members.reduce((s, e) => s + e.met, 0), totScored = members.reduce((s, e) => s + e.scored, 0);
+    if (metric === "rate") {
+      const items = members.map((e) => ({ label: e.rep, pct: rateOf(e) })).filter((x) => x.pct != null).sort((a, b) => b.pct - a.pct);
+      return <ApptCard key={keyp} title={`Show Rate — ${groupLabel}`} bigText={totScored ? (totMet / totScored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scored · per ${noun}`} items={items} kind="rate" />;
+    }
+    const items = members.map((e) => ({ label: e.rep, value: e.met })).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+    return <ApptCard key={keyp} title={`Appts Attended — ${groupLabel}`} bigText={totMet.toLocaleString()} caption={`Met appts · per ${noun}`} items={items} kind="count" />;
+  };
+  const singleCard = (e, metric, breakoutNoun, keyp) => {
+    const by = Object.values(e.by).filter((b) => !inDir || inDir.has(b.label));
+    if (metric === "rate") {
+      const items = by.map((b) => ({ label: b.label, pct: b.scored ? b.met / b.scored : null })).filter((x) => x.pct != null).sort((a, b) => b.pct - a.pct);
+      return <ApptCard key={keyp} title="Show Rate" bigText={e.scored ? (e.met / e.scored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scored · per ${breakoutNoun}`} items={items} kind="rate" />;
+    }
+    const items = by.map((b) => ({ label: b.label, value: b.met })).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+    return <ApptCard key={keyp} title="Appts Attended" bigText={e.met.toLocaleString()} caption={`Met appts · per ${breakoutNoun}`} items={items} kind="count" />;
+  };
+
+  let cards = [];
+  if (single) {
+    const rep = String(org.rep).trim();
+    if (vpScope) { const e = A[rep] || { rep, scored: 0, met: 0, by: {} }; cards = [singleCard(e, "rate", "setter", "sr"), singleCard(e, "count", "setter", "aa")]; }
+    else { const e = S[rep] || { rep, scored: 0, met: 0, by: {} }; cards = [singleCard(e, "rate", "closer", "sr"), singleCard(e, "count", "closer", "aa")]; }
+  } else if (vpScope) {
+    const m = Object.values(A).filter((e) => inScope(e.rep) && isVPrep(e.rep));
+    cards = [groupCard(m, "rate", "Vice Presidents", "VP", "sr"), groupCard(m, "count", "Vice Presidents", "VP", "aa")];
+  } else if (!noOrg) {
+    const m = Object.values(S).filter((e) => inScope(e.rep) && !isVPrep(e.rep));
+    cards = [groupCard(m, "rate", "Acquisition Managers", "AM", "sr"), groupCard(m, "count", "Acquisition Managers", "AM", "aa")];
+  } else {
+    const am = Object.values(S).filter((e) => inScope(e.rep) && !isVPrep(e.rep));
+    const vp = Object.values(A).filter((e) => inScope(e.rep) && isVPrep(e.rep));
+    cards = [groupCard(am, "rate", "Acquisition Managers", "AM", "sr-am"), groupCard(vp, "rate", "Vice Presidents", "VP", "sr-vp"),
+      groupCard(am, "count", "Acquisition Managers", "AM", "aa-am"), groupCard(vp, "count", "Vice Presidents", "VP", "aa-vp")];
+  }
+  return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
+}
+
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
@@ -1222,6 +1317,10 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
+    <Panel title="Appointments — Show Rate & Attended (role-aware)">
+      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Setters (AMs) are scored on the appointments they <b>set</b> that were met, broken out per closer; VPs on appointments <b>assigned</b> to them, broken out per setter. On the All view both groups are shown side by side.</div>
+      <ApptRoleSection store={store} dir={dir} org={org} range={range} />
+    </Panel>
     {(org.rep !== "All" || org.team !== "All" || org.role !== "All" || org.department !== "All") ? (
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
       <Panel title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
