@@ -463,6 +463,16 @@ function creditRole(org) {
   if (/listing/.test(s)) return { field: "owner", label: "Listing Partner" };
   return { field: "owner", label: "Owner" };
 }
+// True when the current scope is a VP (a VP team or a single VP rep). Directory-driven:
+// every rep resolved in scope must be a VP. Used to gate VP-only KPIs (e.g. Contracts Sent,
+// which is tracked by Opportunity Owner = the VP). Falls back to name-based detection if the
+// directory hasn't loaded. The unfiltered "All" view is never VP scope.
+function isVpScope(dir, org) {
+  const isVP = (role) => /vice\s*president|\bvp\b/i.test(String(role || ""));
+  const scope = repsInScope(dir, org);
+  if (scope && scope.size) return [...scope].every((r) => isVP(dir.byRep[r]?.role));
+  return isVP(`${org.role || ""} ${org.team || ""}`); // fallback when directory absent/empty
+}
 
 const WEEK_START = 1;
 const sod = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -551,7 +561,7 @@ const KPIS = {
     targetKey: "rev_out_of_arip", targetType: "revenue", breakoutRep: "acqManager",
     qualify: (r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim()),
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
-  contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true,
+  contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
   appts_attended: { id: "appts_attended", label: "Appointments Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true,
     targetKey: "appts_attended", targetType: "volume",
@@ -884,9 +894,15 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
+  const vpScope = isVpScope(dir, org);
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
-    : allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
+    : allCards.filter((id) => {
+        if (isMktView) return KPIS[id].domain === "marketing";
+        if (KPIS[id].domain === "marketing") return false;
+        if (KPIS[id].vpOnly && !vpScope) return false; // VP-only metrics only show in VP scope
+        return true;
+      });
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
