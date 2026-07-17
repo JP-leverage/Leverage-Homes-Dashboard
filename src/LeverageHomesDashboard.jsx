@@ -226,7 +226,7 @@ const DATASETS = {
   },
   directory: {
     workbook: "context",
-    require: ["REP", "ROLE"], exclude: [],
+    require: ["REP", "TEAM"], exclude: [],
     schema: { rep: "REP", name: "REP", role: "ROLE", team: "TEAM", department: "Department" },
     dedupe: (r) => r.rep, dateField: null, repField: null,
   },
@@ -428,9 +428,21 @@ function buildSample() {
   return { opps_created, opps_closed, pipeline, appointments, leads, calls, directory, targets };
 }
 
+// Derive a role label from the TEAM name. The Context sheet no longer carries a ROLE
+// column, so role (used for VP detection, role-aware Show Rate, and the scorecard Role
+// column) is inferred from team. If a ROLE value ever comes back, it takes precedence.
+function roleFromTeam(team) {
+  const s = String(team || "").toLowerCase();
+  if (/vice\s*president|\bvp\b/.test(s)) return "Vice President";
+  if (/acqu/.test(s)) return "Acquisition Manager";
+  if (/follow.?up/.test(s)) return "Follow-Up Specialist";
+  if (/listing/.test(s)) return "Listing Partner";
+  return team ? String(team).trim() : "";
+}
 function buildDirectory(store) {
   const clean = (v) => (typeof v === "string" ? v.trim() : v);
-  const people = (store.directory || []).map((p) => ({ ...p, rep: clean(p.rep), name: clean(p.name), role: clean(p.role), team: clean(p.team), department: clean(p.department), company: clean(p.company) }));
+  const people = (store.directory || []).map((p) => { const team = clean(p.team);
+    return { ...p, rep: clean(p.rep), name: clean(p.name), role: clean(p.role) || roleFromTeam(team), team, department: clean(p.department), company: clean(p.company) }; });
   const byRep = {}; people.forEach((p) => { if (p.rep) byRep[p.rep] = p; });
   const distinct = (f) => [...new Set(people.map((p) => p[f]).filter(Boolean))].sort();
   const dataReps = [...new Set([...(store.opps_closed || []), ...(store.opps_created || [])].map((r) => r.owner).filter(Boolean))].sort();
