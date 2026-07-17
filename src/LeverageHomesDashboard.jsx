@@ -599,9 +599,9 @@ const KPIS = {
   avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "avg_deal", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, o) => s + num(o.revenue), 0) / rows.length : 0 },
-  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency",
+  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency", snapshot: true,
     targetKey: "pipeline_forecast", targetType: "volume", higherIsBetter: true,
-    qualify: (o) => isOpen(o.stage), agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
+    qualify: (o) => !/closed/i.test(String(o.stage || "")), agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
   opps_created: { id: "opps_created", label: "Opps Created", dataset: "opps_created", format: "number",
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
@@ -683,7 +683,7 @@ function computeKpi(kpi, store, dir, org, range) {
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing" && !ds.companyScope)
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
-  const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
+  const filtered = applyFilters(store[kpi.dataset] || [], ds, org, kpi.snapshot ? null : range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
   const target = kpi.targetKey ? resolveTarget(kpi, store, org, range) : null;
   let progress = null, variance = null, status = "none";
