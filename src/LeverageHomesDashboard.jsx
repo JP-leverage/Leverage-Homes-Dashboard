@@ -1114,8 +1114,22 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         if (custom.length) { out[id] = { items: custom, custom: true }; return; }
       }
       if (ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
-      const primary = kpi.breakoutRep || ds.repField || (ds.repFields && ds.repFields[0]);
+      let primary = kpi.breakoutRep || ds.repField || (ds.repFields && ds.repFields[0]);
       if (!primary) { out[id] = null; return; }
+      // When a team/role/rep is filtered and the dataset carries the role fields, break out by
+      // THAT role's field so the split shows the selected team's people — VPs under a VP filter
+      // (owner), AMs under an AM filter (acqManager), Follow-Up under theirs — instead of the
+      // hardcoded axis. Bars are also restricted to reps actually in scope (see gate below).
+      const scope = repsInScope(dir, org);
+      if (orgFiltered && ds.repFields) {
+        let rf = null;
+        if (org.team !== "All" || org.role !== "All") rf = creditRole(org).field;
+        else if (org.rep !== "All") {
+          const rl = String(dir.byRep[String(org.rep).trim()]?.role || "");
+          rf = /vice\s*president|\bvp\b/i.test(rl) ? "owner" : /acqu/i.test(rl) ? "acqManager" : /follow.?up/i.test(rl) ? "followUp" : null;
+        }
+        if (rf && ds.repFields.includes(rf)) primary = rf;
+      }
       // On the unfiltered All view, lagging KPIs get a role-sectioned breakout: each deal is
       // credited to everyone who touched it (owner/VP, AM & follow-up), bucketed by the owner's
       // actual directory role. Sections overlap and don't sum to the headline (labeled in-card).
@@ -1153,7 +1167,10 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         return;
       }
       const groups = {};
-      res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim(); if (r && (!inDir || inDir.has(r))) (groups[r] = groups[r] || []).push(row); });
+      res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim();
+        if (!r) return;
+        if (scope ? !scope.has(r) : (inDir && !inDir.has(r))) return; // scope when filtered; else directory gate
+        (groups[r] = groups[r] || []).push(row); });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
         value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
@@ -1293,10 +1310,10 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       .filter((x) => x.total > 0).sort((a, b) => a.value - b.value);
   }, [store, org, range, dir]);
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
-  const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage)),
-    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, dir]);
-  const mktClosedByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => isClosedStage(o.stage)),
-    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, dir]);
+  const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage) && inClose(o.closeDate)),
+    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, range, dir]);
+  const mktClosedByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => isClosedStage(o.stage) && inClose(o.closeDate)),
+    (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, range, dir]);
 
   if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} />;
 
