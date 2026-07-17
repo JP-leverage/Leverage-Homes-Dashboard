@@ -801,32 +801,53 @@ function Sparkline({ data, color }) {
     <polyline points={line} fill="none" stroke={color || T.accent} strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
   </svg>);
 }
-function KpiCard({ kpi, result, breakout, spark }) {
+function KpiCard({ kpi, result, breakout, spark, big }) {
   const color = result.status === "good" ? T.good : result.status === "warn" ? T.warn : result.status === "bad" ? T.bad : T.faint;
   const pct = result.progress == null ? null : Math.min(1, Math.max(0, result.progress));
-  const items = breakout && breakout.items ? breakout.items : null;
+  const sections = breakout && breakout.sections ? breakout.sections : null;
+  const items = !sections && breakout && breakout.items ? breakout.items : null;
   const custom = !!(breakout && breakout.custom);
   const bmax = items && items.length ? Math.max(...items.map((b) => b.value)) : 0;
-  const showSpark = spark && !custom;
+  // one shared bar scale across every section's items, so bars are comparable card-wide
+  const smax = sections ? Math.max(1, ...sections.flatMap((s) => s.items.map((b) => b.value))) : 0;
+  const showSpark = spark && !custom && !sections;
   const live = !!(DATASETS[kpi.dataset] && DATASETS[kpi.dataset].dateField);
   const lower = kpi.higherIsBetter === false;
+  const labelCls = big ? "text-[15px]" : "text-[13px]";
+  const numCls = big ? "text-[46px]" : "text-[34px]";
+  const secBar = (b) => {
+    const width = smax ? Math.round((b.value / smax) * 100) : 0;
+    return (<div key={b.label} className="flex items-center gap-2">
+      <span className="text-[11px] shrink-0 truncate" style={{ width: 96, color: T.sub }} title={b.label}>{b.label}</span>
+      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: T.accent }} /></div>
+      <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
+    </div>);
+  };
   return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="text-[13px] font-medium truncate" style={{ color: T.sub }}>{kpi.label}</span>
+        <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
         <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: live ? T.accent : T.faint, background: live ? T.accentSoft : "transparent", border: live ? "none" : `1px solid ${T.border}` }}>{live ? "LIVE" : "SNAPSHOT"}</span>
       </div>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
     {result.unattributable
-      ? (<><div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.faint }}>n/a</div>
+      ? (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
-      : (<><div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+      : (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
       : result.companyWide ? <span className="text-[11px]" style={{ color: T.faint }}>Company-wide · no rep split</span>
       : <span className="text-[11px]" style={{ color: T.faint }}>No target set</span>}
     {showSpark && <div className="pt-1"><Sparkline data={spark} color={result.status === "bad" ? T.bad : T.accent} /></div>}
+    {sections && sections.length > 0 && (<div className="flex flex-col gap-3 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
+      {sections.map((sec) => (
+        <div key={sec.label} className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.06em" }}>{sec.label}</span>
+          {sec.items.map(secBar)}
+        </div>))}
+      <div className="text-[10px] leading-snug" style={{ color: T.faint }}>Each deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so sections overlap and don't sum to the headline.</div>
+    </div>)}
     {items && items.length > 0 && (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
       {items.slice(0, 8).map((b) => {
         const hasT = !custom && b.target != null && b.target > 0;
@@ -957,8 +978,9 @@ const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
   leading: ["opps_created", "appointments", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
-function CardGrid({ ids, results, breakouts, sparks }) {
-  return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>;
+function CardGrid({ ids, results, breakouts, sparks, big }) {
+  const min = big ? 300 : 248;
+  return <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} big={big} />)}</div>;
 }
 function SubHead({ label, note }) {
   return (<div className="flex items-baseline gap-2 mt-1">
@@ -1068,10 +1090,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       });
   const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
   const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
+  const CALL_IDS = ["calls", "talk_time", "qcs"];
+  const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
+  const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
     const out = {};
+    const LAGGING = new Set(CARD_TIERS.lagging);
     const tRows = store.targets || [];
     const repTarget = (kpi, label) => {
       if (!kpi.targetKey) return null;
@@ -1090,6 +1116,42 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       if (ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
       const primary = kpi.breakoutRep || ds.repField || (ds.repFields && ds.repFields[0]);
       if (!primary) { out[id] = null; return; }
+      // On the unfiltered All view, lagging KPIs get a role-sectioned breakout: each deal is
+      // credited to everyone who touched it (owner/VP, AM & follow-up), bucketed by the owner's
+      // actual directory role. Sections overlap and don't sum to the headline (labeled in-card).
+      if (LAGGING.has(id) && !orgFiltered && ds.repFields) {
+        const ROLE_FIELDS = ds.repFields; // e.g. ["owner","acqManager","acqManager2","followUp"]
+        const buckets = {}; // rep -> rows[] (multi-credit)
+        res.rows.forEach((row) => {
+          const seen = new Set();
+          ROLE_FIELDS.forEach((f) => { const r = String(row[f] ?? "").trim(); if (r && !seen.has(r)) { seen.add(r); (buckets[r] = buckets[r] || []).push(row); } });
+        });
+        const classify = (rep) => {
+          const role = String(dir.byRep[rep]?.role || "");
+          if (!dir.byRep[rep]) return "(unassigned)";
+          if (/vice\s*president|\bvp\b/i.test(role)) return "Vice Presidents";
+          if (/acqu/i.test(role)) return "Acquisition Managers";
+          if (/follow.?up/i.test(role)) return "Follow-Up Specialists";
+          return role || "(unassigned)";
+        };
+        const order = ["Vice Presidents", "Acquisition Managers", "Follow-Up Specialists"];
+        const grouped = {};
+        Object.entries(buckets).forEach(([rep, rows]) => {
+          const value = kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows);
+          if (!(value > 0)) return;
+          const sec = classify(rep);
+          (grouped[sec] = grouped[sec] || []).push({ label: rep, value });
+        });
+        const secLabels = Object.keys(grouped).sort((a, b) => {
+          const ia = order.indexOf(a), ib = order.indexOf(b);
+          const ra = ia === -1 ? (a === "(unassigned)" ? 99 : 50) : ia;
+          const rb = ib === -1 ? (b === "(unassigned)" ? 99 : 50) : ib;
+          return ra - rb || a.localeCompare(b);
+        });
+        const secArr = secLabels.map((label) => ({ label, items: grouped[label].sort((x, y) => y.value - x.value) }));
+        out[id] = secArr.length ? { sections: secArr, custom: false } : null;
+        return;
+      }
       const groups = {};
       res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim(); if (r && (!inDir || inDir.has(r))) (groups[r] = groups[r] || []).push(row); });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
@@ -1098,7 +1160,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
-  }, [cards, results, store, range, dir, inDir]);
+  }, [cards, results, store, range, dir, inDir, orgFiltered]);
   const sparks = useMemo(() => {
     const out = {};
     cards.forEach((id) => {
@@ -1241,9 +1303,13 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   return (<div className="flex flex-col gap-5">
     {(!isTxView && !isMktView) ? (<>
       <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
-      <CardGrid ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
+      <CardGrid big ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
       <SubHead label="Leading indicators" note="activities that drive those results" />
-      <CardGrid ids={salesLeading} results={results} breakouts={breakouts} sparks={sparks} />
+      <CardGrid ids={salesLeadingActivity} results={results} breakouts={breakouts} sparks={sparks} />
+      {salesLeadingCall.length > 0 && (<>
+        <SubHead label="Call activity" note="dials, talk time & quality conversations" />
+        <CardGrid ids={salesLeadingCall} results={results} breakouts={breakouts} sparks={sparks} />
+      </>)}
     </>) : (
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
