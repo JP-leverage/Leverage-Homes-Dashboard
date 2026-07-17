@@ -125,7 +125,7 @@ const DATASETS = {
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", source: "Lead Source", segment: "Marketing Segmentation",
-      projNet: ["Projected Net Revenue", "Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"] },
+      projNet: ["Projected Net Revenue"] },
     dedupe: null, dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   arip_out: {
@@ -587,6 +587,10 @@ const isOpen = (s) => s && !/closed/i.test(s);
 const groupSum = (rows, keyFn, valFn) => { const m = {}; rows.forEach((r) => { const k = keyFn(r); if (k) m[k] = (m[k] || 0) + valFn(r); }); return Object.entries(m).map(([label, value]) => ({ label, value })); };
 const txTypeOf = (r) => String(r.txType ?? "").trim();
 const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", rep: "All" };
+// "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
+// One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
+const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Under Contract", "Probate", "Marketing", "Delayed Marketing"];
+const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
@@ -605,15 +609,15 @@ const KPIS = {
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length },
-  arip_dealreview: { id: "arip_dealreview", label: "Deals → Deal Review", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
-    qualify: (r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim()), agg: (rows) => rows.length },
+  arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+    qualify: (r) => isAripOut(r.newValue), agg: (rows) => rows.length },
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
     targetKey: "arip_pullthrough", targetType: "rate",
     compute: (rows) => { if (!rows.length) return 0;
-      return rows.filter((r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim())).length / rows.length; } },
+      return rows.filter((r) => isAripOut(r.newValue)).length / rows.length; } },
   rev_out_of_arip: { id: "rev_out_of_arip", label: "Revenue Out of ARIP", dataset: "arip_out_rev", format: "currency", higherIsBetter: true,
     targetKey: "rev_out_of_arip", targetType: "revenue", breakoutRep: "acqManager",
-    qualify: (r) => ["Deal Review", "Pre Marketing"].includes(String(r.newValue).trim()),
+    qualify: (r) => isAripOut(r.newValue),
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
@@ -849,7 +853,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       <div className="text-[10px] leading-snug" style={{ color: T.faint }}>Each deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so sections overlap and don't sum to the headline.</div>
     </div>)}
     {items && items.length > 0 && (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
-      {items.slice(0, 8).map((b) => {
+      {items.slice(0, 12).map((b) => {
         const hasT = !custom && b.target != null && b.target > 0;
         const hit = hasT ? (lower ? b.value <= b.target : b.value >= b.target) : null;
         const barColor = hasT ? (hit ? T.good : T.bad) : T.accent;
@@ -1140,28 +1144,32 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           const seen = new Set();
           ROLE_FIELDS.forEach((f) => { const r = String(row[f] ?? "").trim(); if (r && !seen.has(r)) { seen.add(r); (buckets[r] = buckets[r] || []).push(row); } });
         });
+        const OFF = "Former team members"; // off-roster reps (not in the Context directory): de-identified + aggregated into one line
         const classify = (rep) => {
-          const role = String(dir.byRep[rep]?.role || "");
-          if (!dir.byRep[rep]) return "(unassigned)";
+          const p = dir.byRep[rep];
+          if (!p) return null; // off-roster -> handled as a single aggregated bucket below, no names
+          const role = String(p.role || "");
           if (/vice\s*president|\bvp\b/i.test(role)) return "Vice Presidents";
           if (/acqu/i.test(role)) return "Acquisition Managers";
           if (/follow.?up/i.test(role)) return "Follow-Up Specialists";
-          return role || "(unassigned)";
+          return role || "Other";
         };
         const order = ["Vice Presidents", "Acquisition Managers", "Follow-Up Specialists"];
         const grouped = {};
+        const offRows = new Set(), offReps = new Set(); // union of off-roster rows (deduped) + distinct off-roster names
         Object.entries(buckets).forEach(([rep, rows]) => {
+          const sec = classify(rep);
+          if (sec == null) { offReps.add(rep); rows.forEach((r) => offRows.add(r)); return; } // aggregate, don't name
           const value = kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows);
           if (!(value > 0)) return;
-          const sec = classify(rep);
           (grouped[sec] = grouped[sec] || []).push({ label: rep, value });
         });
-        const secLabels = Object.keys(grouped).sort((a, b) => {
-          const ia = order.indexOf(a), ib = order.indexOf(b);
-          const ra = ia === -1 ? (a === "(unassigned)" ? 99 : 50) : ia;
-          const rb = ib === -1 ? (b === "(unassigned)" ? 99 : 50) : ib;
-          return ra - rb || a.localeCompare(b);
-        });
+        // Single aggregated line for everyone off the roster — computed over the deduped union of their rows.
+        const offArr = [...offRows];
+        const offValue = offArr.length ? (kpi.compute ? kpi.compute(offArr) : kpi.agg(kpi.qualify ? offArr.filter(kpi.qualify) : offArr)) : 0;
+        if (offValue > 0) { const n = offReps.size; grouped[OFF] = [{ label: `${n} ${n === 1 ? "member" : "members"}`, value: offValue }]; }
+        const rank = (s) => { const i = order.indexOf(s); return i !== -1 ? i : (s === OFF ? 99 : 50); };
+        const secLabels = Object.keys(grouped).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
         const secArr = secLabels.map((label) => ({ label, items: grouped[label].sort((x, y) => y.value - x.value) }));
         out[id] = secArr.length ? { sections: secArr, custom: false } : null;
         return;
@@ -1174,6 +1182,15 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
         value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+      // On the All view, additive count/sum breakouts must tie to the headline. Rows whose breakout
+      // rep is blank or off-roster are dropped from the named bars above, so fold that leftover into
+      // one de-identified remainder line — the parts then sum to the total.
+      const additive = kpi.agg && !kpi.compute && ["number", "currency", "minutes"].includes(kpi.format);
+      if (!orgFiltered && additive && res.value != null) {
+        const shown = items.reduce((s, x) => s + x.value, 0);
+        const rem = res.value - shown;
+        if (rem > 0.5) items.push({ label: "Off-roster / unassigned", value: rem });
+      }
       out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
