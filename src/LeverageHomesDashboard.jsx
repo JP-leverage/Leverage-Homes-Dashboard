@@ -448,6 +448,13 @@ function repsInScope(dir, org) {
     (org.rep === "All" || p.rep === org.rep));
   return new Set(matched.map((p) => String(p.rep).trim()));
 }
+// Set of every rep in the Context directory (source of truth). Used to keep
+// non-directory names (people who show up only in raw activity data) out of the
+// per-rep tables even in the unfiltered "All" view, where repsInScope returns null.
+// Returns null if the directory failed to load, so the tables fall back to showing all.
+function directorySet(dir) {
+  return dir.people && dir.people.length ? new Set(dir.people.map((p) => String(p.rep).trim())) : null;
+}
 function creditRole(org) {
   const s = `${org.role || ""} ${org.team || ""}`.toLowerCase();
   if (/vice\s*president|\bvp\b/.test(s)) return { field: "owner", label: "Vice President" };
@@ -876,6 +883,7 @@ function SpeedToLeadView({ store, range }) {
 function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
+  const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => (isMktView ? KPIS[id].domain === "marketing" : KPIS[id].domain !== "marketing"));
@@ -902,14 +910,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       const primary = kpi.breakoutRep || ds.repField || (ds.repFields && ds.repFields[0]);
       if (!primary) { out[id] = null; return; }
       const groups = {};
-      res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim(); if (r) (groups[r] = groups[r] || []).push(row); });
+      res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim(); if (r && (!inDir || inDir.has(r))) (groups[r] = groups[r] || []).push(row); });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
         value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
       out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
-  }, [cards, results, store, range, dir]);
+  }, [cards, results, store, range, dir, inDir]);
   const sparks = useMemo(() => {
     const out = {};
     cards.forEach((id) => {
@@ -960,11 +968,11 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     results.closed_revenue.rows.forEach((o) => {
       const k = String(o[credit.field] ?? "").trim();
       if (!k) return;
-      if (scope && !scope.has(k)) return;
+      if (scope ? !scope.has(k) : (inDir && !inDir.has(k))) return; // scope when filtered; else directory gate
       (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1;
     });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
-  }, [results.closed_revenue.rows, dir, org, credit]);
+  }, [results.closed_revenue.rows, dir, org, credit, inDir]);
   const scorecard = useMemo(() => {
     const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
     const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
@@ -990,13 +998,13 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const scope = repsInScope(dir, org);
     const isVP = (role) => /vice\s*president|\bvp\b/i.test(String(role || ""));
     return Object.values(M)
-      .filter((x) => !scope || scope.has(x.rep))
+      .filter((x) => scope ? scope.has(x.rep) : (!inDir || inDir.has(x.rep)))
       .map((x) => { const role = dir.byRep[x.rep]?.role, vp = isVP(role);
         const attendeePrimary = vp || (x.apptsSet === 0 && x.apptsAssigned > 0);
         const denom = attendeePrimary ? x.apptsAssigned : x.apptsSet, numer = attendeePrimary ? x.attended : x.setMet;
         return { ...x, team: dir.byRep[x.rep]?.team, role, vp, attendeePrimary, shownAttended: attendeePrimary ? x.attended : x.setMet, rate: denom ? numer / denom : null }; })
       .sort((a, b) => b.oppsCreated - a.oppsCreated || b.minutes - a.minutes);
-  }, [store, dir, org, range]);
+  }, [store, dir, org, range, inDir]);
   const outcomeMix = useMemo(() => {
     const rows = applyFilters(store.appointments || [], DATASETS.appointments, org, range, dir);
     const m = {}; rows.forEach((r) => { const o = String(r.outcome || "").trim() || "(blank)"; m[o] = (m[o] || 0) + 1; });
