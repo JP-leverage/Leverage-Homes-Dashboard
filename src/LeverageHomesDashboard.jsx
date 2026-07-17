@@ -161,7 +161,7 @@ const DATASETS = {
     workbook: "pipeline",
     require: ["Deals to Arip", "Created By", "Appointment Type"], exclude: [], tabInclude: /Totals Appt To Arip/i,
     schema: { name: "Opportunity Name", rep: "Created By", flag: "Deals to Arip", apptType: "Appointment Type", aripDate: "Arip Date" },
-    dedupe: null, dateField: null, repField: "rep",
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep",
   },
   appointments: {
     workbook: "activities",
@@ -1192,17 +1192,19 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     return out;
   }, [cards, store, org, dir]);
   const apptFunnel = useMemo(() => {
-    const rows = applyFilters(store.appt_funnel || [], DATASETS.appt_funnel, org, null, dir);
-    const byType = {}; const opps = new Set(); const aripOpps = new Set();
-    rows.forEach((r) => {
-      const t = String(r.apptType || "").trim() || "(unset)"; byType[t] = (byType[t] || 0) + 1;
-      if (r.name) opps.add(r.name);
-      if (Number(r.flag) === 1 && r.name) { const d = parseDate(r.aripDate);
-        if (!range || (d && d >= range.start && d <= range.end)) aripOpps.add(r.name); }
-    });
-    const total = rows.length || 1;
+    const scoped = applyFilters(store.appt_funnel || [], DATASETS.appt_funnel, org, null, dir); // org gate only; each leg dated separately below
+    const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+    const hasApptDate = scoped.some((r) => r.date); // appointment Created Date present in the sync?
+    // Appointment leg — dated by appointment Created Date; falls back to all-time if that column isn't synced.
+    const apptRows = hasApptDate ? scoped.filter((r) => inR(r.date)) : scoped;
+    const byType = {}; const opps = new Set();
+    apptRows.forEach((r) => { const t = String(r.apptType || "").trim() || "(unset)"; byType[t] = (byType[t] || 0) + 1; if (r.name) opps.add(r.name); });
+    // ARIP leg — dated by Arip Date.
+    const aripOpps = new Set();
+    scoped.forEach((r) => { if (Number(r.flag) === 1 && r.name && inR(r.aripDate)) aripOpps.add(r.name); });
+    const total = apptRows.length || 1;
     const items = Object.entries(byType).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count);
-    return { appts: rows.length, uniqueOpps: opps.size, arips: aripOpps.size, conv: opps.size ? aripOpps.size / opps.size : 0, items };
+    return { appts: apptRows.length, uniqueOpps: opps.size, arips: aripOpps.size, conv: opps.size ? aripOpps.size / opps.size : 0, items, dated: hasApptDate };
   }, [store, org, range, dir]);
 
   const byMonth = useMemo(() => { const m = {};
@@ -1467,7 +1469,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
             <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
       </div>
-      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period.</div>
+      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
     </Panel>
     <Panel title={`${credit.label} leaderboard (closed revenue) — ${drillLabel}`}>
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
