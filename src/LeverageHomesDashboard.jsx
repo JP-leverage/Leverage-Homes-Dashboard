@@ -953,6 +953,19 @@ function SpeedToLeadView({ store, range }) {
     </div>);
 }
 
+const CARD_TIERS = {
+  lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
+  leading: ["opps_created", "appointments", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
+};
+function CardGrid({ ids, results, breakouts, sparks }) {
+  return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>;
+}
+function SubHead({ label, note }) {
+  return (<div className="flex items-baseline gap-2 mt-1">
+    <span className="text-[11px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.08em" }}>{label}</span>
+    <span className="text-[11px]" style={{ color: T.faint, opacity: 0.65 }}>{note}</span>
+  </div>);
+}
 // Role-aware appointment stats. Setter axis = "Created By"; attendee axis = "Assigned".
 // scored = has a real outcome; met = attended (appointment met, not no-show/missed).
 function apptStats(store, dir, range) {
@@ -1053,6 +1066,8 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
         if (KPIS[id].vpOnly && !showVpMetrics) return false; // VP-only metrics: shown at company level + VP scope only
         return true;
       });
+  const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
+  const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
@@ -1224,7 +1239,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} />;
 
   return (<div className="flex flex-col gap-5">
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} />)}</div>
+    {(!isTxView && !isMktView) ? (<>
+      <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
+      <CardGrid ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
+      <SubHead label="Leading indicators" note="activities that drive those results" />
+      <CardGrid ids={salesLeading} results={results} breakouts={breakouts} sparks={sparks} />
+    </>) : (
+      <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
+    )}
     {isTxView ? (<>
       <Panel title={`Median days · ARIP → Close by transaction type — ${drillLabel}`}>
         {txMedians.length ? (<div className="flex flex-col gap-3 pt-1">
