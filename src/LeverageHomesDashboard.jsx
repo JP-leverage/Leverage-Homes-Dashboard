@@ -355,12 +355,19 @@ function makeMockClient() {
   return { async loadDataset(ds) { return { rows: raw[Object.keys(DATASETS).find((k) => DATASETS[k] === ds)] || [], claimed: ["(sample)"] }; } };
 }
 
+const normKey = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
 function normalize(rows, ds) {
   return rows.map((row) => {
+    let ci = null; // lazily-built case/whitespace-insensitive index of this row's headers (fallback only)
+    const get = (h) => {
+      if (h in row) return row[h];                       // exact match wins — no behavior change when headers align
+      if (!ci) { ci = {}; for (const k in row) ci[normKey(k)] = row[k]; }
+      return ci[normKey(h)];                             // tolerate case / stray spacing in the sheet header
+    };
     const o = {};
     for (const f in ds.schema) { const h = ds.schema[f];
-      o[f] = Array.isArray(h) ? (h.map((k) => row[k]).find((v) => v != null && v !== "")) : row[h]; }
-    if (ds.dateCandidates) for (const c of ds.dateCandidates) { const v = row[c]; if (v != null && v !== "") { o.date = v; break; } }
+      o[f] = Array.isArray(h) ? (h.map((k) => get(k)).find((v) => v != null && v !== "")) : get(h); }
+    if (ds.dateCandidates) for (const c of ds.dateCandidates) { const v = get(c); if (v != null && v !== "") { o.date = v; break; } }
     return o;
   });
 }
@@ -587,6 +594,10 @@ const isOpen = (s) => s && !/closed/i.test(s);
 const groupSum = (rows, keyFn, valFn) => { const m = {}; rows.forEach((r) => { const k = keyFn(r); if (k) m[k] = (m[k] || 0) + valFn(r); }); return Object.entries(m).map(([label, value]) => ({ label, value })); };
 const txTypeOf = (r) => String(r.txType ?? "").trim();
 const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", rep: "All" };
+// Single source of truth: which views expose (and therefore apply) Team/Rep filtering.
+// Views that don't expose it must not silently honor a stale Team/Rep selection carried over from another view.
+const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
+const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
 const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Under Contract", "Probate", "Marketing", "Delayed Marketing"];
@@ -599,9 +610,9 @@ const KPIS = {
   avg_deal: { id: "avg_deal", label: "Avg Deal Size", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "avg_deal", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, o) => s + num(o.revenue), 0) / rows.length : 0 },
-  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency", snapshot: true,
+  pipeline_forecast: { id: "pipeline_forecast", label: "Pipeline (forecast)", dataset: "pipeline", format: "currency",
     targetKey: "pipeline_forecast", targetType: "volume", higherIsBetter: true,
-    qualify: (o) => !/closed/i.test(String(o.stage || "")), agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
+    agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
   opps_created: { id: "opps_created", label: "Opps Created", dataset: "opps_created", format: "number",
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
@@ -683,7 +694,7 @@ function computeKpi(kpi, store, dir, org, range) {
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing" && !ds.companyScope)
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
-  const filtered = applyFilters(store[kpi.dataset] || [], ds, org, kpi.snapshot ? null : range, dir);
+  const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
   const target = kpi.targetKey ? resolveTarget(kpi, store, org, range) : null;
   let progress = null, variance = null, status = "none";
@@ -777,7 +788,7 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
   const set = (k) => (v) => { const next = { ...org, [k]: v };
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
-  const showRepFilters = view !== "speedtolead" && view !== "marketing"; // Team/Rep are inert in those views
+  const showRepFilters = viewUsesRepFilter(view); // Team/Rep are inert in those views
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex flex-wrap gap-3 items-end">
       {showRepFilters && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
@@ -1078,7 +1089,9 @@ function ApptRoleSection({ store, dir, org, range }) {
   return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
 }
 
-function ExecutiveDashboard({ store, dir, org, range, view }) {
+function ExecutiveDashboard({ store, dir, org: rawOrg, range, view }) {
+  // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
+  const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -1203,7 +1216,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       const rows = applyFilters(store[kpi.dataset] || [], ds, org, null, dir);
       const src = kpi.qualify ? rows.filter(kpi.qualify) : rows;
       const m = {}; src.forEach((r) => { const k = monthKey(r[ds.dateField]); if (k) (m[k] = m[k] || []).push(r); });
-      const series = Object.entries(m).sort().map(([label, rs]) => ({ label, value: kpi.agg(rs) }));
+      const series = Object.entries(m).sort().map(([label, rs]) => ({ label, value: kpi.agg(rs) })).slice(-12); // trailing 12 mo, preset-independent
       out[id] = series.length >= 2 ? series : null;
     });
     return out;
@@ -1227,7 +1240,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const byMonth = useMemo(() => { const m = {};
     applyFilters(store.opps_closed || [], DATASETS.opps_closed, org, null, dir)
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
-    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
+    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })).slice(-12); }, [store, org, dir]);
   const byStage = useMemo(() => { const m = {};
     const SHORT = { "Closed in Accounting Reconciliation": "Closed · Acct Recon", "Investment Committee (IC)": "Investment Cmte", "Closed Won": "Closed Won", "Buyer ARIP": "Buyer ARIP", "Pre Closing": "Pre Closing", "Deals w/ Issues": "Deals w/ Issues" };
     applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
@@ -1238,7 +1251,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const byCloseMonth = useMemo(() => { const m = {};
     applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir)
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
-    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })); }, [store, org, dir]);
+    return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })).slice(-12); }, [store, org, dir]);
   const drillLabel = org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : org.company !== "All" ? org.company : "All reps";
   const credit = useMemo(() => creditRole(org), [org]);
   const leaderboard = useMemo(() => {
