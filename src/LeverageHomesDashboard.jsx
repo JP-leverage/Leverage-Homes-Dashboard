@@ -894,13 +894,14 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
-  const vpScope = isVpScope(dir, org);
+  const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
+  const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
         if (KPIS[id].domain === "marketing") return false;
-        if (KPIS[id].vpOnly && !vpScope) return false; // VP-only metrics only show in VP scope
+        if (KPIS[id].vpOnly && !showVpMetrics) return false; // VP-only metrics: shown at company level + VP scope only
         return true;
       });
   const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, range)])), [store, dir, org, range]);
