@@ -76,6 +76,7 @@ function fmtDur(sec) {
 
 const WORKBOOKS = {
   opportunities: { id: "1UN-p8DcLKpWkqretcUL_SzmTpnDSOWkPqISbEYKduLg", title: "Homes Dashboard Pt 1 (Opportunities)" },
+  opportunities_pt2: { id: "151Gp7XvOrUHkbbh485lGyDLdX8DDzfZAkjGZPuutkZk", title: "Homes Dashboard Pt 2 (Opportunities)" },
   pipeline:      { id: "1ui2pXxOFeAu58VYiYOgliF_yBCBq7m0H0Xy8JJnoALM", title: "Homes Dashboard PT1 (Pipeline)" },
   context:       { id: "1LUi9VfpX0T_1bgg40NPvt6ltxNX0ASPmwGiymbDmxa8", title: "Homes Dashboard Pt 1 (Context)" },
   activities:    { id: "1gfYW52duE4tmNr5b92F2HvanZroMlcaQZ01_5f4bgac", title: "Homes Dashboard Pt 1 (Activities)" },
@@ -125,7 +126,7 @@ const DATASETS = {
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", source: "Lead Source", segment: "Marketing Segmentation",
       projNet: ["Projected Net Revenue", "Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"] },
-    dedupe: null, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: null, dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   arip_out: {
     workbook: "pipeline",
@@ -133,7 +134,7 @@ const DATASETS = {
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation" },
-    dedupe: null, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: null, dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   tx_duration: {
     workbook: "transactions",
@@ -223,6 +224,26 @@ const DATASETS = {
     schema: { account: "Company / Account", subject: "Subject", rep: "Assigned", status: "Status", task: "Task",
       durationMin: "smrtPhone Call Duration (Minutes)", qc: "smrtPhone QC Y/N" },
     dedupe: null, dateField: "date", dateCandidates: ["Date", "Created Date", "Create Date", "Completed Date"], repField: "rep",
+  },
+  opps_assigned: {
+    workbook: "opportunities_pt2",
+    require: [], exclude: [], tabInclude: /Opps Assigned x YTD/i, tabField: "__tab",
+    schema: { id: "Opportunity ID", name: "Opportunity Name", tab: "__tab" },
+    dedupe: (r) => (r.id ? `${r.tab}|${r.id}` : null), dateField: "date",
+    dateCandidates: ["Created Date", "Create Date", "Date Created", "Edit Date"], repField: "rep",
+  },
+  opps_deaded: {
+    workbook: "opportunities_pt2",
+    require: [], exclude: [], tabInclude: /Opportunities Deaded x YTD/i, tabField: "__tab",
+    schema: { id: "Opportunity ID", name: "Opportunity Name", tab: "__tab" },
+    dedupe: (r) => (r.id ? `${r.tab}|${r.id}` : null), dateField: "date",
+    dateCandidates: ["Created Date", "Create Date", "Date Created", "Edit Date"], repField: "rep",
+  },
+  live_transfers: {
+    workbook: "leads_wb",
+    require: ["Live Transfer Attempted?"], exclude: [], tabInclude: /Live Transfer/i, companyScope: true,
+    schema: { leadId: "Lead ID", attempted: "Live Transfer Attempted?", connected: "Live Transfer Connected?", source: "Lead Source" },
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: null,
   },
   directory: {
     workbook: "context",
@@ -362,6 +383,17 @@ async function loadAll() {
     }), (r) => `${String(r.rep).trim()}|${r.name}|${r.newValue}|${r.date}`);
     if (useGoogle) console.log(`[arip] ${store.arip.length} rows after rep resolution`);
   }
+  // Opps Assigned / Deaded live in per-VP tabs ("... x YTD - Joey"); resolve the rep from the tab name.
+  ["opps_assigned", "opps_deaded"].forEach((k) => {
+    if (!store[k] || !store[k].length) return;
+    const first2full = {};
+    (store.directory || []).forEach((p) => { const f = String(p.rep || "").trim().split(/\s+/)[0].toLowerCase(); if (f && !first2full[f]) first2full[f] = String(p.rep).trim(); });
+    store[k] = store[k].map((r) => {
+      const f = String(r.tab || "").split("-").pop().trim().toLowerCase();
+      return { ...r, rep: first2full[f] || (f ? f.charAt(0).toUpperCase() + f.slice(1) : "") };
+    });
+    if (useGoogle) console.log(`[${k}] ${store[k].length} rows`);
+  });
   return { store, diagnostics, mode: useGoogle ? "google" : "mock" };
 }
 
@@ -541,6 +573,7 @@ function applyFilters(rows, ds, org, range, dir) {
 
 const num = (v) => Number(v) || 0;
 const isQC = (r) => num(r.qc) === 1;
+const isYes = (v) => { const s = String(v ?? "").trim().toLowerCase(); return s === "yes" || s === "y" || s === "true" || s === "1" || Number(v) === 1; };
 const isOpen = (s) => s && !/closed/i.test(s);
 const groupSum = (rows, keyFn, valFn) => { const m = {}; rows.forEach((r) => { const k = keyFn(r); if (k) m[k] = (m[k] || 0) + valFn(r); }); return Object.entries(m).map(([label, value]) => ({ label, value })); };
 const txTypeOf = (r) => String(r.txType ?? "").trim();
@@ -610,6 +643,14 @@ const KPIS = {
   qcs: { id: "qcs", label: "Total QCs", dataset: "calls", format: "number",
     targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length,
     breakoutBy: (rows) => { const q = rows.filter(isQC); const c = (m) => q.filter((r) => num(r.durationMin) >= m).length; return [{ label: "3+ min", value: c(3) }, { label: "5+ min", value: c(5) }, { label: "10+ min", value: c(10) }]; } },
+  opps_assigned: { id: "opps_assigned", label: "Opps Assigned", dataset: "opps_assigned", format: "number", breakoutRep: "rep",
+    targetKey: "opps_assigned", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  opps_deaded: { id: "opps_deaded", label: "Opps Deaded", dataset: "opps_deaded", format: "number", breakoutRep: "rep",
+    targetKey: "opps_deaded", targetType: "volume", higherIsBetter: false, agg: (rows) => rows.length },
+  live_transfers_attempted: { id: "live_transfers_attempted", label: "Live Transfers Attempted", dataset: "live_transfers", format: "number",
+    targetKey: "live_transfers_attempted", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.attempted), agg: (rows) => rows.length },
+  live_transfers_connected: { id: "live_transfers_connected", label: "Live Transfers Connected", dataset: "live_transfers", format: "number",
+    targetKey: "live_transfers_connected", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.connected), agg: (rows) => rows.length },
 };
 function resolveTarget(kpi, store, org, range) {
   const rows = (store.targets || []).filter((t) => t.kpiId === kpi.targetKey);
@@ -894,10 +935,11 @@ function SpeedToLeadView({ store, range }) {
     <div className="flex flex-col gap-5">
       {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
         <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
-      <StlHero big title="Speed to Lead" caption="Median time from lead in → claimed · leads received weekdays 10am–7pm (the accountable window)" rows={b("primary")} />
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
-        <StlHero title="Out of Window" caption="Leads received weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
-        <StlHero title="Weekend" caption="Leads received Saturday & Sunday — context, not scored" rows={b("weekend")} />
+      <StlHero big title="Speed to Lead — Blended" caption="Median time from lead in → claimed · all leads, all windows & channels" rows={rows} />
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
+        <StlHero title="Accountable Window" caption="Weekdays 10am–7pm — the scored window" rows={b("primary")} />
+        <StlHero title="Out of Window" caption="Weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
+        <StlHero title="Weekend" caption="Saturday & Sunday — context, not scored" rows={b("weekend")} />
       </div>
     </div>);
 }
@@ -908,7 +950,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "leads_claimed", "leads_deaded", "calls", "talk_time", "qcs"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
@@ -1006,17 +1048,17 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
     const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
     const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
     const apptRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
-    const leadRows = applyFilters(store.leads_claimed || [], DATASETS.leads_claimed, ALL_ORG, range, dir);
-    const deadRows = applyFilters(store.leads_deaded || [], DATASETS.leads_deaded, ALL_ORG, range, dir);
+    const assignedRows = applyFilters(store.opps_assigned || [], DATASETS.opps_assigned, ALL_ORG, range, dir);
+    const deadedRows = applyFilters(store.opps_deaded || [], DATASETS.opps_deaded, ALL_ORG, range, dir);
     const aripRows = applyFilters(store.arip || [], DATASETS.arip, ALL_ORG, range, dir);
     const enteredRows = applyFilters(store.arip_entered || [], DATASETS.arip_entered, ALL_ORG, range, dir);
     const key = (v) => String(v ?? "").trim();
     const isMet = (o) => /appointment met/i.test(String(o || ""));
     const M = {};
-    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, leadsClaimed: 0, leadsDeaded: 0, oppsArip: 0, aripReview: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
+    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, oppsAssigned: 0, oppsDeaded: 0, oppsArip: 0, aripReview: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
     oppRows.forEach((r) => { const k = key(r.createdBy); if (k) ensure(k).oppsCreated += 1; });
-    leadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsClaimed += 1; });
-    deadRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).leadsDeaded += 1; });
+    assignedRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).oppsAssigned += 1; });
+    deadedRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).oppsDeaded += 1; });
     enteredRows.forEach((r) => { const roles = new Set([r.owner, r.acqManager, r.acqManager2, r.followUp].map(key).filter(Boolean)); roles.forEach((k) => ensure(k).oppsArip += 1); });
     aripRows.forEach((r) => { if (String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1) { const k = key(r.rep); if (k) ensure(k).aripReview += 1; } });
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
@@ -1240,7 +1282,7 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
-          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Leads Claimed</th><th className="pb-2 font-medium text-right">Leads Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
+          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Opps Assigned</th><th className="pb-2 font-medium text-right">Opps Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
           <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
           <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Show Rate</th></tr></thead>
         <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
@@ -1249,8 +1291,8 @@ function ExecutiveDashboard({ store, dir, org, range, view }) {
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsArip.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.aripReview.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsClaimed.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.leadsDeaded.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsAssigned.toLocaleString()}</td>
+          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsDeaded.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
