@@ -1326,8 +1326,9 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     return { items: order.map((k) => ({ label: k, value: m[k], pct: m[k] / named })), blank, total: rows.length };
   }, [store, org, range, dir]);
   const inClose = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+  const inCloseFwd = (d) => { if (!rangeFwd) return true; const t = parseDate(d); return !!(t && t >= rangeFwd.start && t <= rangeFwd.end); };
   const txByType = useMemo(() => {
-    const rows = applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => inClose(o.closeDate));
+    const rows = applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => inCloseFwd(o.closeDate));
     const m = {};
     rows.forEach((o) => { const t = String(o.txType || "").trim() || "(unset)"; const closed = /closed|escrow|owned/i.test(String(o.stage || ""));
       const e = m[t] = m[t] || { type: t, deals: 0, forecast: 0, net: 0, closed: 0, open: 0 };
@@ -1336,7 +1337,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const totDeals = arr.reduce((s, x) => s + x.deals, 0) || 1, totFc = arr.reduce((s, x) => s + x.forecast, 0) || 1, totNet = arr.reduce((s, x) => s + x.net, 0);
     return { rows: arr.map((x) => ({ ...x, avg: x.deals ? x.forecast / x.deals : 0, pctDeals: x.deals / totDeals, pctFc: x.forecast / totFc })),
       totals: { deals: totDeals, forecast: totFc, net: totNet, avg: totFc / totDeals } };
-  }, [store, org, range, dir]);
+  }, [store, org, rangeFwd, dir]);
   const txMedians = useMemo(() => {
     const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
     const m = {};
@@ -1585,8 +1586,8 @@ export default function App() {
   return shell(<>
     <ViewToggle view={view} setView={setView} />
     <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
-    <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
+    <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
   </>);
 }
