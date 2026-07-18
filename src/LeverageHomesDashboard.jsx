@@ -135,7 +135,7 @@ const DATASETS = {
     require: ["New Value", "Opportunity ID", "Follow Up Specialist"], exclude: [], tabInclude: /Opps - Out of ARIP/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
-      txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation" },
+      txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation", projNet: ["Projected Net Revenue"] },
     dedupe: null, dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   tx_duration: {
@@ -300,16 +300,16 @@ const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const q = (title) => encodeURIComponent("'" + String(title).replace(/'/g, "''") + "'");
 
 async function listTabs(id, key) {
-  const url = `${SHEETS_API}/${id}?fields=sheets.properties(title)&key=${key}`;
-  const meta = await fetch(url).then((r) => r.json());
+  const url = `${SHEETS_API}/${id}?fields=sheets.properties(title)&key=${key}&_=${Date.now()}`;
+  const meta = await fetch(url, { cache: "no-store" }).then((r) => r.json());
   if (meta.error) throw new Error(meta.error.message);
   return (meta.sheets || []).map((s) => s.properties.title);
 }
 async function batchGet(id, titles, key) {
   const ranges = titles.map((t) => `ranges=${q(t)}`).join("&");
   const url = `${SHEETS_API}/${id}/values:batchGet?${ranges}` +
-    `&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING&key=${key}`;
-  const data = await fetch(url).then((r) => r.json());
+    `&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING&key=${key}&_=${Date.now()}`;
+  const data = await fetch(url, { cache: "no-store" }).then((r) => r.json());
   if (data.error) throw new Error(data.error.message);
   const out = {};
   (data.valueRanges || []).forEach((vr, i) => { out[titles[i]] = vr.values || []; });
@@ -629,7 +629,7 @@ const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
 const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
-const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Under Contract", "Probate", "Marketing", "Delayed Marketing"];
+const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
@@ -656,7 +656,7 @@ const KPIS = {
     targetKey: "arip_pullthrough", targetType: "rate",
     compute: (rows) => { if (!rows.length) return 0;
       return rows.filter((r) => isAripOut(r.newValue)).length / rows.length; } },
-  rev_out_of_arip: { id: "rev_out_of_arip", label: "Revenue Out of ARIP", dataset: "arip_out_rev", format: "currency", higherIsBetter: true,
+  rev_out_of_arip: { id: "rev_out_of_arip", label: "Revenue Out of ARIP", dataset: "arip_out", format: "currency", higherIsBetter: true,
     targetKey: "rev_out_of_arip", targetType: "revenue", breakoutRep: "acqManager",
     qualify: (r) => isAripOut(r.newValue),
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
