@@ -629,7 +629,7 @@ const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
 const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
-const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won"];
+const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
