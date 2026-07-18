@@ -136,7 +136,7 @@ const DATASETS = {
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation", projNet: ["Projected Net Revenue"] },
-    dedupe: null, dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: null, dedupeInPeriod: "id", dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   tx_duration: {
     workbook: "transactions",
@@ -605,15 +605,26 @@ function parseDate(v) {
 }
 const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : null; };
 
+function dedupeLatest(rows, keyField, dateField) {
+  const best = {}, keep = [];
+  for (const r of rows) {
+    const k = String(r[keyField] ?? "").trim();
+    if (!k) { keep.push(r); continue; }               // no id → can't dedupe, keep as-is
+    const t = +(dateField && parseDate(r[dateField])) || 0;
+    if (!best[k] || t >= best[k].t) best[k] = { r, t }; // keep latest transition per opp
+  }
+  return keep.concat(Object.values(best).map((x) => x.r));
+}
 function applyFilters(rows, ds, org, range, dir) {
   const fields = ds.repFields || (ds.repField ? [ds.repField] : null);
   const reps = fields ? repsInScope(dir, org) : null;
   const dateOn = !!(range && ds.dateField && rows.some((r) => r[ds.dateField]));
-  return rows.filter((row) => {
+  const out = rows.filter((row) => {
     if (reps && !fields.some((f) => reps.has(String(row[f] ?? "").trim()))) return false;
     if (dateOn) { const t = parseDate(row[ds.dateField]); if (!t || t < range.start || t > range.end) return false; }
     return true;
   });
+  return ds.dedupeInPeriod ? dedupeLatest(out, ds.dedupeInPeriod, ds.dateField) : out; // dedupe within the filtered window
 }
 
 const num = (v) => Number(v) || 0;
@@ -629,7 +640,7 @@ const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
 const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
-const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues"];
+const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues", "Probate"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
