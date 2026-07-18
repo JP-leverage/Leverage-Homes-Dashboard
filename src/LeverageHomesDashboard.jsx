@@ -559,6 +559,12 @@ function isVpScope(dir, org) {
   if (scope && scope.size) return [...scope].every((r) => isVP(dir.byRep[r]?.role));
   return isVP(`${org.role || ""} ${org.team || ""}`); // fallback when directory absent/empty
 }
+function isAmFuScope(dir, org) {
+  const test = (role) => /acqu|follow.?up/i.test(String(role || ""));
+  const scope = repsInScope(dir, org);
+  if (scope && scope.size) return [...scope].every((r) => test(dir.byRep[r]?.role));
+  return test(`${org.role || ""} ${org.team || ""}`);
+}
 
 const WEEK_START = 1;
 const sod = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -701,9 +707,9 @@ const KPIS = {
   avg_lead_icp: { id: "avg_lead_icp", label: "Avg Lead ICP", dataset: "leads", format: "decimal", domain: "marketing",
     targetKey: "avg_lead_icp", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, r) => s + num(r.icp), 0) / rows.length : 0 },
-  leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number",
+  leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number", amFuOnly: true,
     targetKey: "leads_claimed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  leads_deaded: { id: "leads_deaded", label: "Leads Deaded", dataset: "leads_deaded", format: "number",
+  leads_deaded: { id: "leads_deaded", label: "Leads Deaded", dataset: "leads_deaded", format: "number", amFuOnly: true,
     targetKey: "leads_deaded", targetType: "volume", higherIsBetter: false, agg: (rows) => rows.length },
   calls: { id: "calls", label: "Calls Logged", dataset: "calls", format: "number",
     targetKey: "calls", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
@@ -1041,7 +1047,7 @@ function SpeedToLeadView({ store, range }) {
 
 const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
-  leading: ["opps_created", "appointments", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
+  leading: ["opps_created", "leads_claimed", "leads_deaded", "appointments", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
 function CardGrid({ ids, results, breakouts, sparks, big }) {
   const min = big ? 300 : 248;
@@ -1195,16 +1201,18 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
         if (KPIS[id].domain === "marketing") return false;
         if (KPIS[id].vpOnly && !showVpMetrics) return false; // VP-only metrics: shown at company level + VP scope only
+        if (KPIS[id].amFuOnly && !showAmFuMetrics) return false; // AM/Follow-Up-only metrics
         return true;
       });
-  const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
-  const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics));
+  const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
+  const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
   const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
