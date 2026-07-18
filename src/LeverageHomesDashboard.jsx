@@ -662,7 +662,8 @@ const KPIS = {
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length },
-  arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+  arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager", rawRows: true,
+    subStat: (rows, ds) => `${dedupeLatest(rows, ds.dedupeInPeriod || "id", ds.dateField, ds.dedupePrefer).filter((r) => isAripOut(r.newValue)).length.toLocaleString()} unique deals`,
     targetKey: "arip_dealreview", targetType: "volume",
     qualify: (r) => isAripOut(r.newValue), agg: (rows) => rows.length },
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
@@ -738,7 +739,7 @@ function computeKpi(kpi, store, dir, org, range) {
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing" && !ds.companyScope)
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
-  const filtered = applyFilters(store[kpi.dataset] || [], ds, org, range, dir);
+  const filtered = applyFilters(store[kpi.dataset] || [], kpi.rawRows && ds.dedupeInPeriod ? { ...ds, dedupeInPeriod: null } : ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
   const target = kpi.targetKey ? resolveTarget(kpi, store, org, range) : null;
   let progress = null, variance = null, status = "none";
@@ -747,7 +748,8 @@ function computeKpi(kpi, store, dir, org, range) {
     status = (kpi.higherIsBetter ? progress >= 1 : value <= target) ? "good"
       : (kpi.higherIsBetter ? progress >= 0.85 : value <= target * 1.15) ? "warn" : "bad";
   }
-  return { value, target, progress, variance, status, rows: filtered, companyWide: !!(ds.companyScope && peopleFilter) };
+  const subtitle = kpi.subStat ? kpi.subStat(filtered, ds) : null;
+  return { value, target, progress, variance, status, rows: filtered, subtitle, companyWide: !!(ds.companyScope && peopleFilter) };
 }
 const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "currency") return (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
@@ -893,6 +895,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       ? (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
       : (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+    {result.subtitle && <span className="text-[10px]" style={{ color: T.faint, marginTop: -2 }}>{result.subtitle}</span>}
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
