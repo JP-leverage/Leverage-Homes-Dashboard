@@ -685,6 +685,7 @@ const KPIS = {
   mkt_opps_created: { id: "mkt_opps_created", label: "Opps Created (sourced)", dataset: "mkt_opps", format: "number", domain: "marketing",
     agg: (rows) => rows.length },
   avg_lead_icp: { id: "avg_lead_icp", label: "Avg Lead ICP", dataset: "leads", format: "decimal", domain: "marketing",
+    targetKey: "avg_lead_icp", targetType: "rate", higherIsBetter: true,
     compute: (rows) => rows.length ? rows.reduce((s, r) => s + num(r.icp), 0) / rows.length : 0 },
   leads_claimed: { id: "leads_claimed", label: "Leads Claimed", dataset: "leads_claimed", format: "number",
     targetKey: "leads_claimed", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
@@ -961,8 +962,9 @@ function stlAgg(rows) { // pooled avg + median across the given rows
   const v = rows.map((r) => r.elapsed).filter((n) => n >= 0);
   return { n: v.length, avg: v.length ? mean(v) : null, med: v.length ? median(v) : null };
 }
-function StlHero({ title, caption, rows, big }) {
+function StlHero({ title, caption, rows, big, target }) {
   const a = stlAgg(rows);
+  const hitGoal = target != null && a.med != null ? a.med <= target : null;
   const groupMed = (key, order) => {
     const m = {}; rows.forEach((r) => { const k = r[key] || "(unset)"; (m[k] = m[k] || []).push(r.elapsed); });
     let items = Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), n: arr.length }));
@@ -990,9 +992,10 @@ function StlHero({ title, caption, rows, big }) {
         <span className="text-[13px] font-medium" style={{ color: T.sub }}>{title}</span>
         <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
       </div>
-      <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
+      <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: hitGoal == null ? T.ink : hitGoal ? T.good : T.bad, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
       <div className="text-[11px]" style={{ color: T.faint }}>{caption}</div>
       <div className="text-[11px]" style={{ color: T.faint }}>median · avg {fmtDur(a.avg)} · {a.n.toLocaleString()} leads</div>
+      {target != null && (<div className="text-[11px] font-medium" style={{ color: hitGoal ? T.good : T.bad }}>Goal ≤ {fmtDur(target)} · {a.med == null ? "—" : hitGoal ? "on track" : `over by ${fmtDur(a.med - target)}`}</div>)}
       {big && a.n > 0 && (<div className="flex flex-col gap-5 pt-3 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
         <Section label="By scenario" items={scen} />
         <Section label="By priority" items={prio} />
@@ -1003,6 +1006,7 @@ function StlHero({ title, caption, rows, big }) {
 }
 function SpeedToLeadView({ store, range }) {
   const rows = useMemo(() => stlRows(store, range), [store, range]);
+  const stlGoal = useMemo(() => { const t = (store.targets || []).find((x) => x.kpiId === "speed_to_lead" && x.scope === "Company"); const v = t ? num(t.value) : 0; return v > 0 ? v * 60 : null; }, [store]); // sheet value is minutes → seconds
   const b = (name) => rows.filter((r) => r.bucket === name);
   const noTime = rows.noTime || {};
   const noTimeMsg = Object.entries(noTime).filter(([, n]) => n > 0).map(([s, n]) => `${s} (${n})`).join(", ");
@@ -1010,7 +1014,7 @@ function SpeedToLeadView({ store, range }) {
     <div className="flex flex-col gap-5">
       {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
         <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
-      <StlHero big title="Speed to Lead — Blended" caption="Median time from lead in → claimed · all leads, all windows & channels" rows={rows} />
+      <StlHero big target={stlGoal} title="Speed to Lead — Blended" caption="Median time from lead in → claimed · all leads, all windows & channels" rows={rows} />
       <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
         <StlHero title="Accountable Window" caption="Weekdays 10am–7pm — the scored window" rows={b("primary")} />
         <StlHero title="Out of Window" caption="Weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
