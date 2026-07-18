@@ -10,15 +10,17 @@ const API_KEY =
 
 const THEMES = {
   light: {
-    canvas: "#F6F7F9", card: "#FFFFFF", border: "#E6E9ED", ink: "#0F1B2D",
-    sub: "#5B6675", faint: "#8A94A3", accent: "#127A56", accentSoft: "#E7F2ED",
-    good: "#127A56", warn: "#B45309", bad: "#BE123C", track: "#EEF1F4", warnSoft: "#FBF1E4",
-    chart: ["#127A56", "#2E9E78", "#5FB89A", "#0F1B2D", "#4A5A6E", "#93CDB8", "#B45309"],
+    canvas: "#ECE3D0", card: "#FFFFFF", border: "#2B2721", ink: "#14110B",
+    sub: "#4B4535", faint: "#877C60", accent: "#A87C0A", accentSoft: "#F3E8CB",
+    good: "#0F6B4A", warn: "#9A5308", bad: "#A81729", track: "#E6DDC8", warnSoft: "#F6ECD6",
+    shadow: "0 2px 5px rgba(28,22,12,0.13), 0 1px 2px rgba(28,22,12,0.08)",
+    chart: ["#A87C0A", "#7A5C12", "#C9A227", "#14110B", "#5A5140", "#D9C68C", "#9A5308"],
   },
   dark: {
     canvas: "#0A0F1A", card: "#121A2A", border: "#25324A", ink: "#EAF1F8",
     sub: "#A7B6C9", faint: "#6E7E93", accent: "#34C08C", accentSoft: "#123528",
     good: "#34C08C", warn: "#E0A63E", bad: "#F2607F", track: "#1B2740", warnSoft: "#2A2214",
+    shadow: "none",
     chart: ["#34C08C", "#5FD3A8", "#8FE3C4", "#7FA0C9", "#A7B6C9", "#2E9E78", "#E0A63E"],
   },
 };
@@ -648,6 +650,7 @@ const KPIS = {
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length },
   arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+    targetKey: "arip_dealreview", targetType: "volume",
     qualify: (r) => isAripOut(r.newValue), agg: (rows) => rows.length },
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
     targetKey: "arip_pullthrough", targetType: "rate",
@@ -816,7 +819,7 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
   const showRepFilters = viewUsesRepFilter(view); // Team/Rep are inert in those views
-  return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex flex-wrap gap-3 items-end">
       {showRepFilters && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
       {showRepFilters && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
@@ -865,7 +868,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
     </div>);
   };
-  return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
@@ -908,7 +911,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
     </div>)}</>)}</div>);
 }
 function Panel({ title, children }) {
-  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <h3 className="text-[13px] font-semibold mb-3" style={{ color: T.sub }}>{title}</h3>{children}</div>);
 }
 function dataFreshness(store) {
