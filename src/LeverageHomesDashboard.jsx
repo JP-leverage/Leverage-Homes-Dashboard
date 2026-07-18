@@ -578,7 +578,7 @@ const eoq = (d) => eod(new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 
 const eoy = (d) => eod(new Date(d.getFullYear(), 11, 31));
 const eow = (d) => eod(addDays(sow(d), 6));
 const DATE_PRESETS = [["today", "Today"], ["yesterday", "Yesterday"], ["this_week", "This Week"], ["last_week", "Last Week"],
-  ["this_month", "This Month"], ["last_month", "Last Month"], ["this_quarter", "This Quarter"], ["last_quarter", "Last Quarter"],
+  ["this_month", "This Month"], ["last_month", "Last Month"], ["this_quarter", "This Quarter"], ["last_quarter", "Last Quarter"], ["next_quarter", "Next Quarter"],
   ["this_year", "This Year"], ["full_year", "Full Year"], ["custom", "Custom Range"]];
 function resolveRange(preset, custom, now = new Date(), forward = false) {
   switch (preset) {
@@ -590,6 +590,7 @@ function resolveRange(preset, custom, now = new Date(), forward = false) {
     case "last_month": { const s = new Date(now.getFullYear(), now.getMonth() - 1, 1); return { start: s, end: eom(s) }; }
     case "this_quarter": return { start: soq(now), end: forward ? eoq(now) : eod(now) };
     case "last_quarter": { const s = new Date(soq(now)); s.setMonth(s.getMonth() - 3); return { start: s, end: eom(new Date(s.getFullYear(), s.getMonth() + 2, 1)) }; }
+    case "next_quarter": { const s = new Date(soq(now)); s.setMonth(s.getMonth() + 3); return { start: s, end: eoq(s) }; }
     case "this_year": return { start: new Date(now.getFullYear(), 0, 1), end: forward ? eoy(now) : eod(now) };
     case "full_year": return { start: new Date(now.getFullYear(), 0, 1), end: eod(new Date(now.getFullYear(), 11, 31)) };
     case "custom": return { start: sod(new Date(custom.start)), end: eod(new Date(custom.end)) };
