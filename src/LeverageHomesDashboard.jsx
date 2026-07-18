@@ -244,9 +244,22 @@ const DATASETS = {
     require: [], exclude: [], tabInclude: /Closed Opps x YTD/i,
     schema: { id: "Opportunity ID", owner: "Opportunity Owner", name: "Opportunity Name",
       revenue: ["Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"], acqManager: "Acquisition Manager",
-      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", closeDate: "Close Date", txType: "Transaction Type" },
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", listingPartner: "Listing Partner", closeDate: "Close Date", txType: "Transaction Type" },
     dedupe: (r) => (r.id != null && r.id !== "" ? String(r.id) : null), dateField: "closeDate",
     repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+  },
+  listing_pipeline: {
+    workbook: "opportunities_pt2",
+    require: ["Total Listing Commission Percentage", "Stage", "Opportunity Name"], exclude: [], tabInclude: /Listing Pipeline x YTD/i, tabField: "sourceTab",
+    schema: { stage: "Stage", name: "Opportunity Name", forecast: "Total Forecasted Revenue", recordType: "Opportunity Record Type",
+      owner: "Opportunity Owner", acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", sourceTab: "sourceTab" },
+    dedupe: (r) => r.name, dateField: null, repField: null,
+  },
+  listing_appts: {
+    workbook: "activities",
+    require: ["Appointment Outcome", "Event Type"], exclude: [], tabInclude: /Appts YTD x Month/i,
+    schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned", outcome: "Appointment Outcome", eventType: "Event Type" },
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep",
   },
   live_transfers: {
     workbook: "leads_wb",
@@ -523,6 +536,17 @@ function creditRole(org) {
   if (/listing/.test(s)) return { field: "owner", label: "Listing Partner" };
   return { field: "owner", label: "Owner" };
 }
+// Listing-Partner helpers. LP identity lives in a tab name ("Listing Pipeline x YTD - Da Silva")
+// or the Assigned field on appointments; directory name may be fuller ("Brendan Da Silva"), so match loosely.
+const normName = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+const nameMatch = (a, b) => { const x = normName(a), y = normName(b); return !!(x && y && (x === y || x.includes(y) || y.includes(x))); };
+const tabLP = (t) => { const s = String(t || ""); const i = s.indexOf(" - "); return (i >= 0 ? s.slice(i + 3) : s).trim(); };
+// Returns the Listing Partner's rep name if the current scope is exactly one Listing Partner, else null.
+function lpScopeName(dir, org) {
+  if (org.rep && org.rep !== "All") { const p = dir.byRep && dir.byRep[String(org.rep).trim()];
+    if (p && /listing/i.test(String(p.role || ""))) return String(org.rep).trim(); }
+  return null;
+}
 // True when the current scope is a VP (a VP team or a single VP rep). Directory-driven:
 // every rep resolved in scope must be a VP. Used to gate VP-only KPIs (e.g. Contracts Sent,
 // which is tracked by Opportunity Owner = the VP). Falls back to name-based detection if the
@@ -675,7 +699,7 @@ const KPIS = {
   opps_deaded: { id: "opps_deaded", label: "Opps Deaded", dataset: "opps_deaded", format: "number", breakoutRep: "editedBy", vpOnly: true,
     targetKey: "opps_deaded", targetType: "volume", higherIsBetter: false, agg: (rows) => rows.length },
   live_transfers_attempted: { id: "live_transfers_attempted", label: "Live Transfers Attempted", dataset: "live_transfers", format: "number", domain: "marketing",
-    targetKey: "live_transfers_attempted", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.attempted), agg: (rows) => rows.length },
+    targetKey: "live_transfers_attempted", targetType: "volume", higherIsBetter: true, qualify: (r) => { const s = String(r.attempted ?? "").toLowerCase(); return s.includes("attempted") && !s.includes("not attempted"); }, agg: (rows) => rows.length },
   live_transfers_connected: { id: "live_transfers_connected", label: "Live Transfers Connected", dataset: "live_transfers", format: "number", domain: "marketing",
     targetKey: "live_transfers_connected", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.connected), agg: (rows) => rows.length },
 };
@@ -1092,6 +1116,54 @@ function ApptRoleSection({ store, dir, org, range }) {
   return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
 }
 
+function ListingPartnerView({ store, dir, range, lp }) {
+  const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+  // Listing pipeline (snapshot — these tabs carry no date), matched to this partner by tab name.
+  const pipe = (store.listing_pipeline || []).filter((r) => nameMatch(lp, tabLP(r.sourceTab)));
+  const SIGNED = /signed listing|on market|under contract|closed won/i; // signed-listing milestone or beyond
+  const signedRev = pipe.filter((r) => SIGNED.test(String(r.stage || ""))).reduce((s, r) => s + num(r.forecast), 0);
+  const pipeByStage = (() => { const m = {}; pipe.forEach((r) => { const k = String(r.stage || "").trim() || "(unset)"; m[k] = (m[k] || 0) + num(r.forecast); });
+    return Object.entries(m).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value); })();
+  // Closed revenue via the Listing Partner column on closed deals, date-gated.
+  const closed = (store.closed_opps || []).filter((r) => nameMatch(lp, r.listingPartner) && inR(r.closeDate));
+  const closedRev = closed.reduce((s, r) => s + num(r.revenue), 0);
+  const closedByMonth = (() => { const m = {}; closed.forEach((r) => { const k = monthKey(r.closeDate); if (k) m[k] = (m[k] || 0) + num(r.revenue); });
+    return Object.entries(m).sort().slice(-12).map(([label, value]) => ({ label, value })); })();
+  // Appointments assigned to this partner (they're the closer), date-gated; setter = Created By.
+  const appts = (store.listing_appts || []).filter((r) => nameMatch(lp, r.rep) && inR(r.date));
+  const isMet = (a) => /met/i.test(String(a.outcome || "")) && !/no show|missed/i.test(String(a.outcome || ""));
+  const scored = appts.filter((a) => { const o = String(a.outcome || "").trim(); return o && !/^no outcome$/i.test(o); });
+  const attended = scored.filter(isMet).length;
+  const showRate = scored.length ? attended / scored.length : 0;
+  const cnt = (rows, keyFn) => { const m = {}; rows.forEach((r) => { const k = String(keyFn(r) || "").trim() || "(unset)"; m[k] = (m[k] || 0) + 1; });
+    const tot = rows.length || 1; return Object.entries(m).map(([label, count]) => ({ label, count, pct: count / tot })).sort((a, b) => b.count - a.count); };
+  const card = (label, value, format, dataset) => ({ kpi: { id: label, label, format, dataset }, result: { value, target: null, progress: null, variance: null, status: "none", rows: [] } });
+  const cards = [
+    card("Forecasted Rev · Signed Listing", signedRev, "currency", "listing_pipeline"),
+    card("Closed Revenue", closedRev, "currency", "closed_opps"),
+    card("Appointments Attended", attended, "number", "listing_appts"),
+    card("Appt Show Rate", showRate, "percent", "listing_appts"),
+  ];
+  const empty = (t) => <div className="text-[12px]" style={{ color: T.faint }}>{t}</div>;
+  return (<div className="flex flex-col gap-5">
+    <div className="text-[12px]" style={{ color: T.faint }}>Listing Partner view · <span style={{ color: T.sub }}>{lp}</span> — deal metrics track signed listings; appointments are scored on those assigned to {lp}, broken out by who set them.</div>
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+      {cards.map((c) => <KpiCard key={c.kpi.id} kpi={c.kpi} result={c.result} breakout={null} spark={null} />)}
+      <div className="rounded-xl p-4 flex flex-col gap-2" style={{ background: T.card, border: `1px dashed ${T.border}` }}>
+        <span className="text-[13px] font-medium" style={{ color: T.sub }}>Deals to Signed Listing</span>
+        <span className="text-[13px]" style={{ color: T.faint }}>Pending your report — will wire in when it lands.</span>
+      </div>
+    </div>
+    <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <Panel title={`Appointment outcomes — ${lp}`}>{appts.length ? <Bars items={cnt(appts, (a) => a.outcome)} /> : empty("No appointments in range.")}</Panel>
+      <Panel title={`Who set the appointments — ${lp}`}>{appts.length ? <Bars items={cnt(appts, (a) => a.createdBy)} tint={T.chart[2]} /> : empty("No appointments in range.")}</Panel>
+    </div>
+    <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <Panel title={`Closed revenue by month — ${lp}`}>{closedByMonth.length ? <MoneyBars items={closedByMonth} fmtVal={(v) => fmt(v, "currency")} /> : empty("No closed revenue in range.")}</Panel>
+      <Panel title={`Listing pipeline by stage — ${lp}`}>{pipeByStage.length ? <MoneyBars items={pipeByStage} tint={T.chart[1]} fmtVal={(v) => fmt(v, "currency")} /> : empty("No listing pipeline found for this partner.")}</Panel>
+    </div>
+  </div>);
+}
 function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
@@ -1352,6 +1424,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, range, dir]);
 
   if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} />;
+  const lpName = lpScopeName(dir, org); // single Listing Partner selected → swap to their card set
+  if (lpName) return <ListingPartnerView store={store} dir={dir} range={range} lp={lpName} />;
 
   return (<div className="flex flex-col gap-5">
     {(!isTxView && !isMktView) ? (<>
@@ -1584,8 +1658,10 @@ export default function App() {
     <div className="mt-2" style={{ color: T.faint }}>Check the API key, that the Sheets API is enabled, and each workbook is shared “Anyone with the link → Viewer.”</div></div>);
 
   return shell(<>
-    <ViewToggle view={view} setView={setView} />
-    <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
+    <div className="pb-2" style={{ position: "sticky", top: 0, zIndex: 30, background: T.canvas }}>
+      <ViewToggle view={view} setView={setView} />
+      <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
+    </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
     <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
