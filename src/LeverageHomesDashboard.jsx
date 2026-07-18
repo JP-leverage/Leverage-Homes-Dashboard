@@ -136,7 +136,7 @@ const DATASETS = {
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value",
       txType: "Transaction Type", icp: "ISA ICP Total Score", source: "Lead Source", segment: "Marketing Segmentation", projNet: ["Projected Net Revenue"] },
-    dedupe: null, dedupeInPeriod: "id", dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: null, dedupeInPeriod: "id", dedupePrefer: (r) => isAripOut(r.newValue), dateField: "date", dateCandidates: ["Edit Date", "Date", "Created Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   tx_duration: {
     workbook: "transactions",
@@ -605,13 +605,15 @@ function parseDate(v) {
 }
 const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : null; };
 
-function dedupeLatest(rows, keyField, dateField) {
+function dedupeLatest(rows, keyField, dateField, prefer) {
   const best = {}, keep = [];
   for (const r of rows) {
     const k = String(r[keyField] ?? "").trim();
     if (!k) { keep.push(r); continue; }               // no id → can't dedupe, keep as-is
     const t = +(dateField && parseDate(r[dateField])) || 0;
-    if (!best[k] || t >= best[k].t) best[k] = { r, t }; // keep latest transition per opp
+    const p = prefer ? (prefer(r) ? 1 : 0) : 1;        // prefer qualifying rows (positive stages) over dead-ends
+    const cur = best[k];
+    if (!cur || p > cur.p || (p === cur.p && t >= cur.t)) best[k] = { r, t, p };
   }
   return keep.concat(Object.values(best).map((x) => x.r));
 }
@@ -624,7 +626,7 @@ function applyFilters(rows, ds, org, range, dir) {
     if (dateOn) { const t = parseDate(row[ds.dateField]); if (!t || t < range.start || t > range.end) return false; }
     return true;
   });
-  return ds.dedupeInPeriod ? dedupeLatest(out, ds.dedupeInPeriod, ds.dateField) : out; // dedupe within the filtered window
+  return ds.dedupeInPeriod ? dedupeLatest(out, ds.dedupeInPeriod, ds.dateField, ds.dedupePrefer) : out; // dedupe within the filtered window
 }
 
 const num = (v) => Number(v) || 0;
