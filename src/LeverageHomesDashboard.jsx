@@ -1295,10 +1295,16 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         return;
       }
       const groups = {};
-      res.rows.forEach((row) => { const r = String(row[primary] ?? "").trim();
-        if (!r) return;
-        if (scope ? !scope.has(r) : (inDir && !inDir.has(r))) return; // scope when filtered; else directory gate
-        (groups[r] = groups[r] || []).push(row); });
+      const inScope = (r) => scope ? scope.has(r) : !(inDir && !inDir.has(r));
+      res.rows.forEach((row) => {
+        if (ds.repFields) { // multi-role: credit the row to every scoped rep it touches, matching the headline's OR-match
+          new Set(ds.repFields.map((f) => String(row[f] ?? "").trim()).filter(Boolean))
+            .forEach((r) => { if (inScope(r)) (groups[r] = groups[r] || []).push(row); });
+        } else {
+          const r = String(row[primary] ?? "").trim();
+          if (r && inScope(r)) (groups[r] = groups[r] || []).push(row);
+        }
+      });
       const items = Object.entries(groups).map(([label, rows]) => ({ label,
         value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
