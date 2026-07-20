@@ -922,7 +922,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       ? (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
       : (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
-    {result.subtitle && <span className="text-[10px]" style={{ color: T.faint, marginTop: -2 }}>{result.subtitle}</span>}
+    {result.subtitle && <span className="text-[12px] font-medium" style={{ color: T.sub, marginTop: -1 }}>{result.subtitle}</span>}
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
       <span className="text-[11px]" style={{ color: T.faint }}>{result.progress != null ? `${(result.progress * 100).toFixed(0)}% of ` : ""}{fmt(result.target, kpi.format)} target</span></div>)
@@ -1722,6 +1722,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · ARIP-unique-hero</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · subtitle-legible</p>
   </>);
 }
