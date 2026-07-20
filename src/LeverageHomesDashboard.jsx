@@ -1389,15 +1389,16 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const credit = useMemo(() => creditRole(org), [org]);
   const leaderboard = useMemo(() => {
     const scope = repsInScope(dir, org);
+    const RF = DATASETS.closed_opps.repFields; // owner/VP + AM + AM2 + follow-up
     const by = {};
     results.closed_revenue.rows.forEach((o) => {
-      const k = String(o[credit.field] ?? "").trim();
-      if (!k) return;
-      if (scope ? !scope.has(k) : (inDir && !inDir.has(k))) return; // scope when filtered; else directory gate
-      (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1;
+      new Set(RF.map((f) => String(o[f] ?? "").trim()).filter(Boolean)).forEach((k) => { // dedupe roles within one deal
+        if (scope ? !scope.has(k) : (inDir && !inDir.has(k))) return; // scope when filtered; else directory gate
+        (by[k] = by[k] || { owner: k, rev: 0, deals: 0 }); by[k].rev += num(o.revenue); by[k].deals += 1;
+      });
     });
     return Object.values(by).map((x) => ({ ...x, team: dir.byRep[x.owner]?.team, avg: x.deals ? x.rev / x.deals : 0 })).sort((a, b) => b.rev - a.rev);
-  }, [results.closed_revenue.rows, dir, org, credit, inDir]);
+  }, [results.closed_revenue.rows, dir, org, inDir]);
   const scorecard = useMemo(() => {
     const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
     const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
@@ -1637,17 +1638,17 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </div>
       <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
     </Panel>
-    <Panel title={`${credit.label} leaderboard (closed revenue) — ${drillLabel}`}>
+    <Panel title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
-          <th className="pb-2 font-medium">{credit.label}</th><th className="pb-2 font-medium">Team</th>
+          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Team</th>
           <th className="pb-2 font-medium text-right">Closed Revenue</th><th className="pb-2 font-medium text-right">Deals</th><th className="pb-2 font-medium text-right">Avg Deal</th></tr></thead>
         <tbody>{leaderboard.length ? leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 font-medium">{row.owner}</td><td className="py-2" style={{ color: T.sub }}>{row.team || "—"}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
-          : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals credited to a {credit.label.toLowerCase()} in this scope.</td></tr>)}</tbody>
+          : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals in this scope.</td></tr>)}</tbody>
       </table></Panel>
     <Panel title="Rep scorecard">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
@@ -1722,6 +1723,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · subtitle-legible</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · team-leaderboard</p>
   </>);
 }
