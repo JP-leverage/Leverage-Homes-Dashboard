@@ -681,11 +681,10 @@ const KPIS = {
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager",
+  opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager", uniqueTotal: true,
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length },
-  arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager", rawRows: true,
-    subStat: (rows, ds) => `${dedupeLatest(rows, ds.dedupeInPeriod || "id", ds.dateField, ds.dedupePrefer).filter((r) => isAripOut(r.newValue)).length.toLocaleString()} unique deals`,
+  arip_dealreview: { id: "arip_dealreview", label: "Deals Out of ARIP", dataset: "arip_out", format: "number", higherIsBetter: true, breakoutRep: "acqManager", rawRows: true, uniqueTotal: true,
     targetKey: "arip_dealreview", targetType: "volume",
     qualify: (r) => isAripOut(r.newValue), agg: (rows) => rows.length },
   arip_pullthrough: { id: "arip_pullthrough", label: "ARIP Pull-Through", dataset: "arip_out", format: "percent", higherIsBetter: true,
@@ -770,7 +769,13 @@ function computeKpi(kpi, store, dir, org, range) {
     status = (kpi.higherIsBetter ? progress >= 1 : value <= target) ? "good"
       : (kpi.higherIsBetter ? progress >= 0.85 : value <= target * 1.15) ? "warn" : "bad";
   }
-  const subtitle = kpi.subStat ? kpi.subStat(filtered, ds) : null;
+  let subtitle = kpi.subStat ? kpi.subStat(filtered, ds) : null;
+  if (kpi.uniqueTotal && ds.dedupeInPeriod) {
+    const cnt = (rs) => (kpi.qualify ? rs.filter(kpi.qualify) : rs).length;
+    const totalN = cnt(applyFilters(store[kpi.dataset] || [], { ...ds, dedupeInPeriod: null }, org, range, dir));
+    const uniqN = cnt(applyFilters(store[kpi.dataset] || [], ds, org, range, dir));
+    subtitle = `${uniqN.toLocaleString()} unique · ${totalN.toLocaleString()} total`;
+  }
   return { value, target, progress, variance, status, rows: filtered, subtitle, companyWide: !!(ds.companyScope && peopleFilter) };
 }
 const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
@@ -1717,6 +1722,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-18 · ARIP-dedupe</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · ARIP-unique-total</p>
   </>);
 }
