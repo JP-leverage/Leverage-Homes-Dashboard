@@ -157,7 +157,7 @@ const DATASETS = {
     require: ["New Value", "Opportunity Owner", "Acquisition Manager"], exclude: [], tabInclude: /Opps\s*-\s*ARIP\s*-\s*YTD/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score", txType: "Transaction Type" },
-    dedupe: (r) => `${r.id}|${r.date}`, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: (r) => `${r.id}|${r.date}`, dedupeInPeriod: "id", dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   appt_funnel: {
     workbook: "pipeline",
@@ -598,6 +598,21 @@ function resolveRange(preset, custom, now = new Date(), forward = false) {
   }
 }
 const rangeDays = (r) => Math.max(1, Math.round((r.end - r.start) / 86400000) + 1);
+// Fraction of calendar months a range covers: full months count as 1 (so a quarter = 3.0, a year = 12.0);
+// a partial current month prorates by day. Used to scale monthly targets to the selected period.
+function monthsInRange(start, end) {
+  const s = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  let total = 0, y = s.getFullYear(), m = s.getMonth();
+  while (y < e.getFullYear() || (y === e.getFullYear() && m <= e.getMonth())) {
+    const dim = new Date(y, m + 1, 0).getDate();
+    const first = (y === s.getFullYear() && m === s.getMonth()) ? s.getDate() : 1;
+    const last = (y === e.getFullYear() && m === e.getMonth()) ? e.getDate() : dim;
+    total += (last - first + 1) / dim;
+    m++; if (m > 11) { m = 0; y++; }
+  }
+  return total || 1 / 30.4;
+}
 function parseDate(v) {
   if (v == null || v === "") return null;
   if (v instanceof Date) return isNaN(v) ? null : v;
@@ -739,7 +754,7 @@ function resolveTarget(kpi, store, org, range) {
   let base = null;
   for (const [scope, val] of tries) { const hit = rows.find((t) => t.scope === scope && t.scopeValue === val); if (hit) { base = num(hit.value); break; } }
   if (base == null) return null;
-  return kpi.targetType === "rate" ? base : base * (rangeDays(range) / 30.4);
+  return kpi.targetType === "rate" ? base : base * monthsInRange(range.start, range.end);
 }
 function computeKpi(kpi, store, dir, org, range) {
   const ds = DATASETS[kpi.dataset];
@@ -1228,7 +1243,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
       if (!hit) return null;
       const base = num(hit.value);
-      return kpi.targetType === "rate" ? base : base * (rangeDays(range) / 30.4);
+      return kpi.targetType === "rate" ? base : base * monthsInRange(range.start, range.end);
     };
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
@@ -1702,6 +1717,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"}</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-18 · ARIP-dedupe</p>
   </>);
 }
