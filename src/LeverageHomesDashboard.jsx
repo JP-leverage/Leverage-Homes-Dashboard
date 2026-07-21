@@ -392,14 +392,21 @@ function dedupe(rows, keyFn) {
   for (const r of rows) { const k = keyFn(r); if (k == null || !seen.has(k)) { seen.add(k); out.push(r); } }
   return out;
 }
-async function loadAll() {
+async function loadAll(onProgress) {
   const useGoogle = !!API_KEY;
   const client = useGoogle ? makeGoogleClient(API_KEY) : makeMockClient();
   const store = {}, diagnostics = [];
-  for (const key in DATASETS) {
+  const keys = Object.keys(DATASETS);
+  const total = keys.length;
+  const friendly = (ds) => { const t = WORKBOOKS[ds.workbook]?.title || ds.workbook; const m = t.match(/\(([^)]+)\)/); return (m ? m[1] : t).trim(); };
+  let done = 0;
+  for (const key of keys) {
     const ds = DATASETS[key];
+    onProgress && onProgress({ done, total, label: friendly(ds) }); // announce what's about to load
     const { rows, claimed } = await client.loadDataset(ds);
     store[key] = dedupe(normalize(rows, ds), ds.dedupe);
+    done++;
+    onProgress && onProgress({ done, total, label: friendly(ds) });
     if (useGoogle && !rows.length)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
@@ -1685,8 +1692,36 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   </div>);
 }
 
+function LoadingScreen({ progress }) {
+  const total = progress && progress.total ? progress.total : 0;
+  const done = progress && progress.done ? progress.done : 0;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const label = (progress && progress.label) || "";
+  const phase = !total ? "Connecting to Google Sheets" : pct >= 100 ? "Assembling your dashboard" : `Reading ${label || "workbooks"}`;
+  return (
+    <div className="flex flex-col items-center justify-center gap-7" style={{ minHeight: "60vh" }}>
+      <style>{`@keyframes lhShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}@keyframes lhPulse{0%,100%{opacity:.5}50%{opacity:1}}`}</style>
+      <div className="flex flex-col items-center gap-1">
+        <div className="text-[14px] font-semibold" style={{ color: T.ink }}>Loading your dashboard</div>
+        <div className="text-[12px]" style={{ color: T.faint, animation: "lhPulse 1.6s ease-in-out infinite" }}>{phase}…</div>
+      </div>
+      <div className="text-[52px] font-bold leading-none tracking-tight" style={{ color: T.accent, fontVariantNumeric: "tabular-nums" }}>{pct}%</div>
+      <div style={{ width: "min(560px, 82vw)" }}>
+        <div className="rounded-full overflow-hidden" style={{ height: 12, background: T.track }}>
+          <div className="h-full rounded-full relative overflow-hidden" style={{ width: `${Math.max(5, pct)}%`, background: T.accent, transition: "width .5s cubic-bezier(.4,0,.2,1)" }}>
+            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent)", animation: "lhShimmer 1.4s linear infinite" }} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-2.5">
+          <span className="text-[12px]" style={{ color: T.sub }}>{total ? `Reading ${label}…` : "Starting up…"}</span>
+          <span className="text-[12px]" style={{ color: T.faint, fontVariantNumeric: "tabular-nums" }}>{total ? `${done} of ${total} sources` : ""}</span>
+        </div>
+      </div>
+    </div>);
+}
+
 export default function App() {
-  const [st, setSt] = useState({ loading: true, error: null, store: null, dir: null, diagnostics: [], mode: "mock" });
+  const [st, setSt] = useState({ loading: true, error: null, store: null, dir: null, diagnostics: [], mode: "mock", progress: { done: 0, total: 0, label: "" } });
   const [org, setOrg] = useState({ company: "All", department: "All", team: "All", role: "All", rep: "All" });
   const [view, setView] = useState("sales");
   const [mode, setMode] = useState(() => (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
@@ -1696,7 +1731,7 @@ export default function App() {
   const rangeFwd = useMemo(() => resolveRange(date.preset, date, new Date(), true), [date]); // pipeline forecast spans the full selected period (deals close in the future)
 
   useEffect(() => { let alive = true;
-    (async () => { try { const { store, diagnostics, mode } = await loadAll();
+    (async () => { try { const { store, diagnostics, mode } = await loadAll((p) => { if (alive) setSt((s) => ({ ...s, progress: p })); });
       if (alive) setSt({ loading: false, error: null, store, dir: buildDirectory(store), diagnostics, mode }); }
       catch (e) { if (alive) setSt((s) => ({ ...s, loading: false, error: String(e.message || e) })); } })();
     return () => { alive = false; }; }, []);
@@ -1711,7 +1746,7 @@ export default function App() {
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
     <div className="p-6 max-w-[1200px] mx-auto">{body}</div></div>);
 
-  if (st.loading) return shell(<div className="text-sm" style={{ color: T.faint }}>Loading data…</div>);
+  if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
   if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
     <div className="font-semibold mb-1" style={{ color: T.warn }}>Couldn’t load Google Sheets</div><div style={{ color: T.sub }}>{st.error}</div>
     <div className="mt-2" style={{ color: T.faint }}>Check the API key, that the Sheets API is enabled, and each workbook is shared “Anyone with the link → Viewer.”</div></div>);
@@ -1723,6 +1758,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-20 · team-leaderboard</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · loading-progress</p>
   </>);
 }
