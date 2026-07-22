@@ -785,14 +785,14 @@ function resolveTarget(kpi, store, org, range) {
   if (base == null) return null;
   return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
 }
-function computeKpi(kpi, store, dir, org, range) {
+function computeKpi(kpi, store, dir, org, range, targetRange) {
   const ds = DATASETS[kpi.dataset];
   const peopleFilter = org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   if (!(ds.repField || ds.repFields) && peopleFilter && kpi.domain !== "marketing" && !ds.companyScope)
     return { value: null, target: null, progress: null, variance: null, status: "none", rows: [], unattributable: true };
   const filtered = applyFilters(store[kpi.dataset] || [], kpi.rawRows && ds.dedupeInPeriod ? { ...ds, dedupeInPeriod: null } : ds, org, range, dir);
   const value = kpi.compute ? kpi.compute(filtered) : kpi.agg(kpi.qualify ? filtered.filter(kpi.qualify) : filtered);
-  const target = kpi.targetKey ? resolveTarget(kpi, store, org, range) : null;
+  const target = kpi.targetKey ? resolveTarget(kpi, store, org, targetRange || range) : null;
   let progress = null, variance = null, status = "none";
   if (target != null && target !== 0) {
     progress = value / target; variance = kpi.higherIsBetter ? value / target - 1 : target / value - 1;
@@ -1267,7 +1267,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
-  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, KPIS[id].forwardDate ? rangeFwd : range)])), [store, dir, org, range, rangeFwd]);
+  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, KPIS[id].forwardDate ? rangeFwd : range, rangeFwd)])), [store, dir, org, range, rangeFwd]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
     const out = {};
@@ -1278,7 +1278,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
       if (!hit) return null;
       const base = num(hit.value);
-      return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
+      return kpi.targetType === "rate" ? base : base * businessMonthsInRange(rangeFwd.start, rangeFwd.end);
     };
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
@@ -1370,7 +1370,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       out[id] = items.length ? { items, custom: false } : null;
     });
     return out;
-  }, [cards, results, store, range, dir, inDir, orgFiltered]);
+  }, [cards, results, store, range, rangeFwd, dir, inDir, orgFiltered]);
   const sparks = useMemo(() => {
     const out = {};
     cards.forEach((id) => {
@@ -1781,6 +1781,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · business-day-targets</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · full-period-targets</p>
   </>);
 }
