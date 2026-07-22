@@ -513,8 +513,7 @@ function roleFromTeam(team) {
   if (/listing/.test(s)) return "Listing Partner";
   return team ? String(team).trim() : "";
 }
-function buildDirectory(store) {
-  const clean = (v) => (typeof v === "string" ? v.trim() : v);
+function buildDirectory(store) {  const clean = (v) => (typeof v === "string" ? v.trim() : v);
   const people = (store.directory || []).map((p) => { const team = clean(p.team);
     return { ...p, rep: clean(p.rep), name: clean(p.name), role: clean(p.role) || roleFromTeam(team), team, department: clean(p.department), company: clean(p.company) }; });
   const byRep = {}; people.forEach((p) => { if (p.rep) byRep[p.rep] = p; });
@@ -523,6 +522,18 @@ function buildDirectory(store) {
   return { people, byRep, options: {
     company: distinct("company"), department: distinct("department"), team: distinct("team"),
     role: distinct("role"), rep: people.length ? distinct("rep") : dataReps } };
+}
+// A Listing Partner is any directory rep whose (canonical) role or team reads "Listing".
+const isLProle = (role, team) => /listing/i.test(String(role || "")) || /listing/i.test(String(team || ""));
+function lpNameSet(dir) {
+  return (dir.people || []).filter((p) => isLProle(p.role, p.team)).map((p) => String(p.rep).trim());
+}
+// Tag each appointment row with lpAssigned = its Assigned rep is a Listing Partner.
+// Lets the outcome-based appointment metrics pull LP-routed appts out of the AM/FU + VP numbers.
+function tagApptRoles(store, dir) {
+  const lps = lpNameSet(dir);
+  const isLP = (name) => { const n = String(name || "").trim(); return !!n && lps.some((r) => nameMatch(n, r)); };
+  ["appointments", "appointments_attended", "appts_seg"].forEach((k) => { (store[k] || []).forEach((r) => { r.lpAssigned = isLP(r.rep); }); });
 }
 function repsInScope(dir, org) {
   const noOrgFilter = org.company === "All" && org.department === "All" && org.team === "All" && org.role === "All" && org.rep === "All";
@@ -743,10 +754,11 @@ const KPIS = {
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
   appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true,
     targetKey: "appts_attended", targetType: "volume",
-    qualify: (r) => apptAttended(r.outcome), agg: (rows) => rows.length },
+    qualify: (r) => !r.lpAssigned && apptAttended(r.outcome), agg: (rows) => rows.length },
   show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, amFuOnly: true, targetKey: "show_rate", targetType: "rate",
-    subStat: () => "Met ÷ scheduled · excl. cancelled&rescheduled (blanks count against)",
-    compute: (rows) => { const denom = rows.filter((x) => !apptExcluded(x.outcome));
+    subStat: () => "Met ÷ scheduled · excl. cancelled&rescheduled & Listing-Partner appts",
+    compute: (rows) => { const core = rows.filter((x) => !x.lpAssigned);
+      const denom = core.filter((x) => !apptExcluded(x.outcome));
       if (!denom.length) return 0; return denom.filter((x) => apptAttended(x.outcome)).length / denom.length; } },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing",
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
@@ -1142,20 +1154,26 @@ function SubHead({ label, note }) {
 // Role-aware appointment stats. Setter axis = "Created By"; attendee axis = "Assigned".
 // scored = has a real outcome; met = attended (appointment met, not no-show/missed).
 function apptStats(store, dir, range) {
-  // Attended + Show Rate run off Start date. scored = show-rate denominator (excl. cancelled/rescheduled); met = attended (Met + blank).
+  // Attended + Show Rate run off Start date. scored = show-rate denominator (excl. cancelled/rescheduled); met = attended (Met only).
+  // LP-routed appts (Assigned = Listing Partner) go to their own bucket L, kept out of the AM/FU (setter) and VP (attendee) axes.
   const rows = applyFilters(store.appointments_attended || [], DATASETS.appointments_attended, ALL_ORG, range, dir);
   const key = (v) => String(v ?? "").trim();
   const scored = (o) => !apptExcluded(o.outcome);
   const met = (o) => apptAttended(o.outcome);
-  const S = {}, A = {};
+  const S = {}, A = {}, L = {};
   rows.forEach((o) => {
     const setter = key(o.createdBy), att = key(o.rep), sc = scored(o), mt = met(o);
+    if (o.lpAssigned) {
+      if (att) { const e = L[att] = L[att] || { rep: att, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
+        if (setter) { const b = e.by[setter] = e.by[setter] || { label: setter, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
+      return;
+    }
     if (setter) { const e = S[setter] = S[setter] || { rep: setter, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
       if (att) { const b = e.by[att] = e.by[att] || { label: att, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
     if (att) { const e = A[att] = A[att] || { rep: att, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
       if (setter) { const b = e.by[setter] = e.by[setter] || { label: setter, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
   });
-  return { S, A };
+  return { S, A, L };
 }
 function ApptCard({ title, bigText, caption, items, kind }) {
   const max = kind === "count" ? Math.max(1, ...items.map((i) => i.value)) : 1;
@@ -1177,13 +1195,14 @@ function ApptCard({ title, bigText, caption, items, kind }) {
   </div>);
 }
 function ApptRoleSection({ store, dir, org, range }) {
-  const { S, A } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
+  const { S, A, L } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
   const inDir = useMemo(() => directorySet(dir), [dir]);
   const isVPrep = (rep) => /vice\s*president|\bvp\b/i.test(String(dir.byRep[String(rep).trim()]?.role || ""));
   const scope = repsInScope(dir, org);
   const inScope = (rep) => (!scope || scope.has(rep)) && (!inDir || inDir.has(rep));
   const single = org.rep !== "All";
   const vpScope = isVpScope(dir, org);
+  const lpScope = !!(scope && scope.size && [...scope].every((r) => isLProle(dir.byRep[r]?.role, dir.byRep[r]?.team)));
   const noOrg = org.team === "All" && org.rep === "All" && org.role === "All" && org.department === "All" && org.company === "All";
   const rateOf = (e) => (e.scored ? e.met / e.scored : null);
 
@@ -1214,14 +1233,19 @@ function ApptRoleSection({ store, dir, org, range }) {
   } else if (vpScope) {
     const m = Object.values(A).filter((e) => inScope(e.rep) && isVPrep(e.rep));
     cards = [groupCard(m, "rate", "Vice Presidents", "VP", "sr"), groupCard(m, "count", "Vice Presidents", "VP", "aa")];
+  } else if (lpScope) {
+    const m = Object.values(L).filter((e) => inScope(e.rep));
+    cards = [groupCard(m, "rate", "Listing Partners", "LP", "sr"), groupCard(m, "count", "Listing Partners", "LP", "aa")];
   } else if (!noOrg) {
     const m = Object.values(S).filter((e) => inScope(e.rep) && !isVPrep(e.rep));
     cards = [groupCard(m, "rate", "Acquisition Managers", "AM", "sr"), groupCard(m, "count", "Acquisition Managers", "AM", "aa")];
   } else {
     const am = Object.values(S).filter((e) => inScope(e.rep) && !isVPrep(e.rep));
     const vp = Object.values(A).filter((e) => inScope(e.rep) && isVPrep(e.rep));
+    const lp = Object.values(L).filter((e) => inScope(e.rep));
     cards = [groupCard(am, "rate", "Acquisition Managers", "AM", "sr-am"), groupCard(vp, "rate", "Vice Presidents", "VP", "sr-vp"),
       groupCard(am, "count", "Acquisition Managers", "AM", "aa-am"), groupCard(vp, "count", "Vice Presidents", "VP", "aa-vp")];
+    if (lp.length) cards.push(groupCard(lp, "rate", "Listing Partners", "LP", "sr-lp"), groupCard(lp, "count", "Listing Partners", "LP", "aa-lp"));
   }
   return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
 }
@@ -1478,6 +1502,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
     apptSetRows.forEach((r) => { const s = key(r.createdBy); if (s) ensure(s).apptsSet += 1; });        // Set = created in window (all outcomes)
     apptAttRows.forEach((r) => {
+      if (r.lpAssigned) return;                                                                          // LP-routed appts are pulled out of AM/VP rate
       const sched = !apptExcluded(r.outcome), att = apptAttended(r.outcome);                             // Start in window
       const s = key(r.createdBy); if (s) { const e = ensure(s); if (sched) e.setSched += 1; if (att) e.setMet += 1; }
       const a = key(r.rep);       if (a) { const e = ensure(a); e.apptsAssigned += 1; if (sched) e.attSched += 1; if (att) e.attended += 1; }
@@ -1780,7 +1805,7 @@ export default function App() {
 
   useEffect(() => { let alive = true;
     (async () => { try { const { store, diagnostics, mode } = await loadAll((p) => { if (alive) setSt((s) => ({ ...s, progress: p })); });
-      if (alive) setSt({ loading: false, error: null, store, dir: buildDirectory(store), diagnostics, mode }); }
+      if (alive) { const dir = buildDirectory(store); tagApptRoles(store, dir); setSt({ loading: false, error: null, store, dir, diagnostics, mode }); } }
       catch (e) { if (alive) setSt((s) => ({ ...s, loading: false, error: String(e.message || e) })); } })();
     return () => { alive = false; }; }, []);
 
@@ -1806,6 +1831,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · attended-noshow-guard</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · lp-separated</p>
   </>);
 }
