@@ -25,6 +25,13 @@ const THEMES = {
   },
 };
 let T = THEMES.light;
+// Density presets. Mirrors the `let T` theme pattern: App reassigns `D` from state each render
+// before children read it. Comfortable = default; Compact packs more per screen without shrinking print.
+const DENSITIES = {
+  comfortable: { cardPad: "p-4", gridGap: 16, minBig: 300, min: 248, numBig: "text-[46px]", num: "text-[34px]" },
+  compact:     { cardPad: "p-3", gridGap: 10, minBig: 268, min: 214, numBig: "text-[38px]", num: "text-[30px]" },
+};
+let D = DENSITIES.comfortable;
 const FONT = { fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" };
 
 /* Speed to Lead — team metric. Elapsed = claim minus start (start = Created Date
@@ -846,6 +853,37 @@ const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "percent") return (v * 100).toFixed(1) + "%";
   if (f === "minutes") return Math.round(v).toLocaleString() + " min";
   if (f === "decimal") return (Math.round(v * 10) / 10).toFixed(1); return Math.round(v).toLocaleString(); };
+// Animated count-up for headline numbers. Interpolates the raw value and passes through fmt(), so
+// currency/percent/minutes all animate correctly. Respects prefers-reduced-motion and lands exactly
+// on the final value (so a PDF captured after load shows the real number).
+function useCountUp(value) {
+  const [disp, setDisp] = useState(0);
+  const prev = React.useRef(null);
+  useEffect(() => {
+    if (value == null || isNaN(value)) { setDisp(value); prev.current = value; return; }
+    const reduce = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const from = (prev.current == null || isNaN(prev.current)) ? 0 : prev.current;
+    prev.current = value;
+    if (reduce || from === value) { setDisp(value); return; }
+    const dur = 600, t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    let raf;
+    const tick = (t) => { const p = Math.min(1, (t - t0) / dur); const eased = 1 - Math.pow(1 - p, 3);
+      setDisp(from + (value - from) * eased); if (p < 1) raf = requestAnimationFrame(tick); else setDisp(value); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return disp;
+}
+function CountNum({ value, format }) { return <>{fmt(useCountUp(value), format)}</>; }
+// Subtle per-column heatmap: shades a cell background with the accent color at an alpha proportional
+// to value ÷ column-max (invert for lower-is-better columns). Returns undefined below a floor so
+// near-zero cells stay clean. 8-digit hex alpha prints fine.
+function heatBg(v, max, invert) {
+  if (v == null || !max || max <= 0) return undefined;
+  let r = Math.max(0, Math.min(1, v / max)); if (invert) r = 1 - r;
+  const alpha = Math.round(r * 42); if (alpha <= 3) return undefined;
+  return { background: `${T.accent}${alpha.toString(16).padStart(2, "0")}` };
+}
 function breakdown(rows, keyFn) {
   const m = {}; rows.forEach((r) => { const k = String(keyFn(r) ?? "").trim() || "(unset)"; m[k] = (m[k] || 0) + 1; });
   const total = rows.length || 1;
@@ -972,7 +1010,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
   const live = !!(DATASETS[kpi.dataset] && DATASETS[kpi.dataset].dateField);
   const lower = kpi.higherIsBetter === false;
   const labelCls = big ? "text-[15px]" : "text-[13px]";
-  const numCls = big ? "text-[46px]" : "text-[34px]";
+  const numCls = big ? D.numBig : D.num;
   const secBar = (b) => {
     const width = smax ? Math.round((b.value / smax) * 100) : 0;
     return (<div key={b.label} className="flex items-center gap-2">
@@ -981,7 +1019,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
     </div>);
   };
-  return (<div className="rounded-xl p-4 flex flex-col gap-3 h-full" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className={`rounded-xl ${D.cardPad} flex flex-col gap-3 h-full`} style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
@@ -991,7 +1029,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
     {result.unattributable
       ? (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.faint }}>n/a</div>
           <span className="text-[11px]" style={{ color: T.faint }}>Not tracked per rep in this data</span></>)
-      : (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(result.value, kpi.format)}</div>
+      : (<><div className={`${numCls} font-bold leading-none tracking-tight`} style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}><CountNum value={result.value} format={kpi.format} /></div>
     {result.subtitle && <span className="text-[12px] font-medium" style={{ color: T.sub, marginTop: -1 }}>{result.subtitle}</span>}
     {result.target != null ? (<div className="flex flex-col gap-1.5">
       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div className="h-full rounded-full" style={{ width: `${(pct || 0) * 100}%`, background: color }} /></div>
@@ -1024,9 +1062,16 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       })}
     </div>)}</>)}</div>);
 }
-function Panel({ title, children }) {
-  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+function Panel({ title, children, collapsible }) {
+  const [open, setOpen] = useState(true); // default expanded — a PDF export always captures full content
+  if (!collapsible) return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <h3 className="text-[13px] font-semibold mb-3" style={{ color: T.sub }}>{title}</h3>{children}</div>);
+  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+    <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between" style={{ cursor: "pointer" }}>
+      <h3 className="text-[13px] font-semibold" style={{ color: T.sub }}>{title}</h3>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6" stroke={T.faint} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
+    {open && <div className="mt-3">{children}</div>}</div>);
 }
 function dataFreshness(store) {
   const pick = [["opps_created", "Opps"], ["appointments", "Appts"], ["calls", "Calls"], ["leads_claimed", "Leads"], ["arip_entered", "ARIP"], ["opps_closed", "Closed"]];
@@ -1148,14 +1193,46 @@ const CARD_TIERS = {
   leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
 function CardGrid({ ids, results, breakouts, sparks, big }) {
-  const min = big ? 300 : 248;
-  return <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} big={big} />)}</div>;
+  const min = big ? D.minBig : D.min;
+  return <div className="grid" style={{ gap: D.gridGap, gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} big={big} />)}</div>;
 }
 function SubHead({ label, note }) {
   return (<div className="flex items-baseline gap-2 mt-1">
     <span className="text-[11px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.08em" }}>{label}</span>
     <span className="text-[11px]" style={{ color: T.faint, opacity: 0.65 }}>{note}</span>
   </div>);
+}
+// At-a-glance strip: a few headline numbers with a trailing-12mo trend arrow, above the full grid.
+// Print-safe (static). items: [{ label, value, format, trend: 1 | -1 | 0 | null }].
+function SummaryStrip({ items }) {
+  return (<div className="rounded-xl p-4 flex flex-wrap gap-x-8 gap-y-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+    {items.map((it) => (
+      <div key={it.label} className="flex flex-col gap-1" style={{ minWidth: 128 }}>
+        <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.06em" }}>{it.label}</span>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[28px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}><CountNum value={it.value} format={it.format} /></span>
+          {it.trend != null && it.trend !== 0 && <span className="text-[13px] font-semibold" style={{ color: it.trend > 0 ? T.good : T.bad }} title="vs. previous month">{it.trend > 0 ? "▲" : "▼"}</span>}
+        </div>
+      </div>))}
+  </div>);
+}
+// Small-multiples: one tight sparkline per key metric for the selected rep. Shown only on single-rep scope.
+function RepTrendStrip({ ids, sparks, results }) {
+  const items = ids.map((id) => ({ id, kpi: KPIS[id], series: sparks[id], val: results[id] && results[id].value }))
+    .filter((x) => x.kpi && x.series && x.series.length >= 2);
+  if (!items.length) return null;
+  return (<Panel collapsible title="Rep trends · trailing 12 months">
+    <div className="grid gap-x-6 gap-y-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+      {items.map(({ id, kpi, series, val }) => (
+        <div key={id} className="flex flex-col gap-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[12px] truncate" style={{ color: T.sub }} title={kpi.label}>{kpi.label}</span>
+            <span className="text-[13px] font-semibold shrink-0" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(val, kpi.format)}</span>
+          </div>
+          <Sparkline data={series} />
+        </div>))}
+    </div>
+  </Panel>);
 }
 // Role-aware appointment stats. Setter axis = "Created By"; attendee axis = "Assigned".
 // scored = has a real outcome; met = attended (appointment met, not no-show/missed).
@@ -1525,6 +1602,9 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     });
     return out;
   }, [cards, store, org, dir]);
+  // Month-over-month direction from the trailing spark series (last point vs the one before).
+  const trendOf = (id) => { const s = sparks[id]; if (!s || s.length < 2) return null;
+    const a = s[s.length - 2].value, b = s[s.length - 1].value; return b > a ? 1 : b < a ? -1 : 0; };
   const apptFunnel = useMemo(() => {
     const scoped = applyFilters(store.appt_funnel || [], DATASETS.appt_funnel, org, null, dir); // org gate only; each leg dated separately below
     const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
@@ -1661,6 +1741,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
 
   return (<div className="flex flex-col gap-5">
     {(!isTxView && !isMktView) ? (<>
+      <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
+        label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />
       <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
       <CardGrid big ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
       <SubHead label="Leading indicators" note="activities that drive those results" />
@@ -1669,6 +1751,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <SubHead label="Call activity" note="dials, talk time & quality conversations" />
         <CardGrid ids={salesLeadingCall} results={results} breakouts={breakouts} sparks={sparks} />
       </>)}
+      {org.rep !== "All" && <RepTrendStrip ids={["opps_to_arip", "opps_created", "appointments", "calls", "talk_time", "leads_claimed"]} sparks={sparks} results={results} />}
     </>) : (
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
@@ -1764,13 +1847,13 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
-    <Panel title="Appointments — Show Rate & Attended (role-aware)">
+    <Panel collapsible title="Appointments — Show Rate & Attended (role-aware)">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Setters (AMs) are scored on the appointments they <b>set</b> that were met, broken out per closer; VPs on appointments <b>assigned</b> to them, broken out per setter. On the All view both groups are shown side by side.</div>
       <ApptRoleSection store={store} dir={dir} org={org} range={range} />
     </Panel>
     {(
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-      <Panel title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel collapsible title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -1778,7 +1861,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
-      <Panel title={`Deals · Stage × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+      <Panel collapsible title={`Deals · Stage × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -1788,7 +1871,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
     )}
-    <Panel title={`Closed revenue by month — ${drillLabel} (Total Net Revenue · all months)`}><div style={{ height: 200 }}><ResponsiveContainer>
+    <Panel collapsible title={`Closed revenue by month — ${drillLabel} (Total Net Revenue · all months)`}><div style={{ height: 200 }}><ResponsiveContainer>
       <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -1796,7 +1879,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
       </BarChart></ResponsiveContainer></div></Panel>
-    <Panel title={`Appt Set → ARIP — ${drillLabel} (appointment funnel)`}>
+    <Panel collapsible title={`Appt Set → ARIP — ${drillLabel} (appointment funnel)`}>
       <Bars items={apptFunnel.items} tint={T.chart[2]} />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
         {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
@@ -1805,41 +1888,42 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </div>
       <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
     </Panel>
-    <Panel title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
+    <Panel collapsible title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
       <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 520 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 px-2 whitespace-nowrap font-medium">Rep</th><th className="pb-2 px-2 whitespace-nowrap font-medium">Team</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Closed Revenue</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Deals</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Avg Deal</th></tr></thead>
-        <tbody>{leaderboard.length ? leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+        <tbody>{leaderboard.length ? (() => { const mRev = Math.max(0, ...leaderboard.map((r) => r.rev)), mDeals = Math.max(0, ...leaderboard.map((r) => r.deals)); return leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 px-2 font-medium">{row.owner}</td><td className="py-2 px-2" style={{ color: T.sub }}>{row.team || "—"}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink, ...heatBg(row.rev, mRev) }}>{fmt(row.rev, "currency")}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.deals, mDeals) }}>{row.deals}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>)); })()
           : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals in this scope.</td></tr>)}</tbody>
       </table></div></Panel>
-    <Panel title="Rep scorecard">
-      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
+    <Panel collapsible title="Rep scorecard">
+      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed. <span style={{ opacity: 0.8 }}>Cell shading is relative to the column high (Opps Deaded inverted — fewer is greener).</span></div>
       <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 1080 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 px-2 whitespace-nowrap font-medium">Rep</th><th className="pb-2 px-2 whitespace-nowrap font-medium">Role</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Created</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps→ARIP</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">ARIP→Review</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Assigned</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Deaded</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Talk Time</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">QCs</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Appts Set</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Attended</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Show Rate</th></tr></thead>
-        <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+        <tbody>{(() => { const mx = (k) => Math.max(0, ...scorecard.map((r) => r[k] || 0)); const M = { oppsCreated: mx("oppsCreated"), oppsArip: mx("oppsArip"), aripReview: mx("aripReview"), oppsAssigned: mx("oppsAssigned"), oppsDeaded: mx("oppsDeaded"), minutes: mx("minutes"), qcs: mx("qcs"), apptsSet: mx("apptsSet"), shownAttended: mx("shownAttended"), rate: Math.max(0, ...scorecard.map((r) => r.rate || 0)) };
+          const R = "py-2 px-2 text-right"; return scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 px-2 font-medium">{row.rep}</td>
           <td className="py-2 px-2" style={{ color: T.sub }}>{row.role || "—"}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsArip.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.aripReview.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsAssigned.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsDeaded.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.shownAttended.toLocaleString()}</td>
-          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>))}</tbody>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.oppsCreated, M.oppsCreated) }}>{row.oppsCreated.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.oppsArip, M.oppsArip) }}>{row.oppsArip.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.aripReview, M.aripReview) }}>{row.aripReview.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.oppsAssigned, M.oppsAssigned) }}>{row.oppsAssigned.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.oppsDeaded, M.oppsDeaded, true) }}>{row.oppsDeaded.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.minutes, M.minutes) }}>{fmt(row.minutes, "minutes")}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.qcs, M.qcs) }}>{row.qcs.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.apptsSet, M.apptsSet) }}>{row.apptsSet.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.shownAttended, M.shownAttended) }}>{row.shownAttended.toLocaleString()}</td>
+          <td className={R} style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink, ...(row.rate == null ? {} : heatBg(row.rate, M.rate)) }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>)); })()}</tbody>
       </table></div></Panel>
-    <Panel title="Appointment outcomes (all appointments in scope)">
+    <Panel collapsible title="Appointment outcomes (all appointments in scope)">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
       <div className="flex flex-col gap-2">{outcomeMix.items.map((o) => (
         <div key={o.label} className="flex items-center gap-3">
@@ -1886,6 +1970,8 @@ export default function App() {
   const [view, setView] = useState("sales");
   const [mode, setMode] = useState(() => (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
   T = THEMES[mode];
+  const [density, setDensity] = useState("comfortable");
+  D = DENSITIES[density] || DENSITIES.comfortable;
   const [date, setDate] = useState({ preset: "this_year", start: "2026-01-01", end: iso(new Date()) });
   const range = useMemo(() => resolveRange(date.preset, date, new Date()), [date]);
   const rangeFwd = useMemo(() => resolveRange(date.preset, date, new Date(), true), [date]); // pipeline forecast spans the full selected period (deals close in the future)
@@ -1909,6 +1995,8 @@ export default function App() {
       <div className="text-[11px] flex items-center gap-2" style={{ color: T.faint }}>
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
         <span className="hidden sm:inline">{iso(range.start)} → {iso(range.end)}</span>
+        <button onClick={() => setDensity((d) => d === "compact" ? "comfortable" : "compact")} title={density === "compact" ? "Comfortable spacing" : "Compact spacing"}
+          className="flex items-center justify-center rounded-md" style={{ height: 26, padding: "0 8px", border: `1px solid ${T.border}`, color: T.sub, background: T.card, fontSize: 11, fontWeight: 600 }}>{density === "compact" ? "Compact" : "Cozy"}</button>
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
     <div className="p-3 sm:p-6 max-w-[1200px] mx-auto" style={{ overflowX: "clip" }}>{body}</div></div>);
 
@@ -1924,6 +2012,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · polish-pass</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · v2-features</p>
   </>);
 }
