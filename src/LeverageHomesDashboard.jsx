@@ -1173,7 +1173,7 @@ function apptStats(store, dir, range) {
     if (att) { const e = A[att] = A[att] || { rep: att, total: 0, scored: 0, met: 0, by: {} }; e.total++; if (sc) e.scored++; if (mt) e.met++;
       if (setter) { const b = e.by[setter] = e.by[setter] || { label: setter, total: 0, scored: 0, met: 0 }; b.total++; if (sc) b.scored++; if (mt) b.met++; } }
   });
-  return { S, A, L };
+  return { S, A, L, rows };
 }
 function ApptCard({ title, bigText, caption, items, kind }) {
   const max = kind === "count" ? Math.max(1, ...items.map((i) => i.value)) : 1;
@@ -1194,12 +1194,88 @@ function ApptCard({ title, bigText, caption, items, kind }) {
     </div>) : <span className="text-[11px]" style={{ color: T.faint }}>No appointments in scope</span>}
   </div>);
 }
+// Canonical appointment-outcome order + colors for the breakout donuts.
+function outcomeMeta() {
+  return [
+    ["Appointment Met", T.accent],
+    ["(blank)", "#64748b"],
+    ["No Show", "#f87171"],
+    ["Appointment Missed", "#ef4444"],
+    ["Attended, No Show", "#fb923c"],
+    ["Rescheduled", "#fbbf24"],
+    ["Cancelled", "#94a3b8"],
+  ];
+}
+function tallyOutcomes(rows) { const m = {}; rows.forEach((r) => { const o = String(r.outcome || "").trim() || "(blank)"; m[o] = (m[o] || 0) + 1; }); return m; }
+function Donut({ data, size = 116, thickness = 15 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const r = (size - thickness) / 2, C = 2 * Math.PI * r; let off = 0;
+  return (<svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
+    <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={T.track} strokeWidth={thickness} />
+    <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+      {total > 0 && data.filter((d) => d.value > 0).map((d, i) => { const len = (d.value / total) * C;
+        const seg = <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness} strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-off} strokeLinecap="butt" />;
+        off += len; return seg; })}
+    </g>
+    <text x="50%" y="47%" textAnchor="middle" dominantBaseline="central" style={{ fill: T.ink, fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{total.toLocaleString()}</text>
+    <text x="50%" y="63%" textAnchor="middle" dominantBaseline="central" style={{ fill: T.faint, fontSize: 9, letterSpacing: "0.06em" }}>APPTS</text>
+  </svg>);
+}
+function OutcomeDonutCard({ title, tally, big }) {
+  const meta = outcomeMeta();
+  const data = meta.map(([label, color]) => ({ label, color, value: tally[label] || 0 }));
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const present = data.filter((d) => d.value > 0);
+  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+    <div className="flex items-center gap-1.5 mb-3">
+      <span className={`${big ? "text-[14px]" : "text-[13px]"} font-medium truncate`} style={{ color: T.sub }}>{title}</span>
+      <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
+    </div>
+    {total > 0 ? (<div className="flex items-center gap-4">
+      <Donut data={data} size={big ? 132 : 112} thickness={big ? 17 : 14} />
+      <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+        {present.map((d) => (<div key={d.label} className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: d.color }} />
+          <span className="text-[11px] truncate flex-1" style={{ color: T.sub }} title={d.label}>{d.label}</span>
+          <span className="text-[11px] tabular-nums shrink-0" style={{ color: T.ink }}>{d.value.toLocaleString()}</span>
+          <span className="text-[11px] tabular-nums shrink-0 text-right" style={{ width: 40, color: T.faint }}>{(d.value / total * 100).toFixed(0)}%</span>
+        </div>))}
+      </div>
+    </div>) : <span className="text-[11px]" style={{ color: T.faint }}>No appointments in scope</span>}
+  </div>);
+}
+function ApptOutcomeBreakout({ groups }) {
+  const anyGroup = groups.am + groups.vp + groups.lp;
+  return (<div className="flex flex-col gap-4 mt-1">
+    <SubHead label="Outcome breakout" note="every appointment by disposition · attended axis (Start date)" />
+    <OutcomeDonutCard big title="All appointments — combined" tally={groups.combinedTally} />
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+      {groups.amTotal > 0 && <OutcomeDonutCard title="Acquisition Managers — appts they set" tally={groups.amTally} />}
+      {groups.vpTotal > 0 && <OutcomeDonutCard title="Vice Presidents — appts assigned" tally={groups.vpTally} />}
+      {groups.lpTotal > 0 && <OutcomeDonutCard title="Listing Partners — appts assigned" tally={groups.lpTally} />}
+    </div>
+  </div>);
+}
 function ApptRoleSection({ store, dir, org, range }) {
-  const { S, A, L } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
+  const { S, A, L, rows } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
   const inDir = useMemo(() => directorySet(dir), [dir]);
   const isVPrep = (rep) => /vice\s*president|\bvp\b/i.test(String(dir.byRep[String(rep).trim()]?.role || ""));
   const scope = repsInScope(dir, org);
   const inScope = (rep) => (!scope || scope.has(rep)) && (!inDir || inDir.has(rep));
+  const outcomes = useMemo(() => {
+    const role = (n) => String(dir.byRep[String(n).trim()]?.role || "");
+    const isAMFU = (n) => /acqu|follow.?up/i.test(role(n));
+    const isVP = (n) => /vice\s*president|\bvp\b/i.test(role(n));
+    const core = rows.filter((r) => !r.lpAssigned);
+    const combined = rows.filter((r) => inScope(String(r.createdBy).trim()) || inScope(String(r.rep).trim()));
+    const am = core.filter((r) => isAMFU(r.createdBy) && inScope(String(r.createdBy).trim()));
+    const vp = core.filter((r) => isVP(r.rep) && inScope(String(r.rep).trim()));
+    const lp = rows.filter((r) => r.lpAssigned && inScope(String(r.rep).trim()));
+    return { combinedTally: tallyOutcomes(combined),
+      amTally: tallyOutcomes(am), amTotal: am.length,
+      vpTally: tallyOutcomes(vp), vpTotal: vp.length,
+      lpTally: tallyOutcomes(lp), lpTotal: lp.length };
+  }, [rows, dir, scope]);
   const single = org.rep !== "All";
   const vpScope = isVpScope(dir, org);
   const lpScope = !!(scope && scope.size && [...scope].every((r) => isLProle(dir.byRep[r]?.role, dir.byRep[r]?.team)));
@@ -1247,7 +1323,10 @@ function ApptRoleSection({ store, dir, org, range }) {
       groupCard(am, "count", "Acquisition Managers", "AM", "aa-am"), groupCard(vp, "count", "Vice Presidents", "VP", "aa-vp")];
     if (lp.length) cards.push(groupCard(lp, "rate", "Listing Partners", "LP", "sr-lp"), groupCard(lp, "count", "Listing Partners", "LP", "aa-lp"));
   }
-  return <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>;
+  return (<div className="flex flex-col gap-4">
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>
+    <ApptOutcomeBreakout groups={outcomes} />
+  </div>);
 }
 
 function ListingPartnerView({ store, dir, range, lp }) {
@@ -1831,6 +1910,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · lp-separated</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · outcome-donuts</p>
   </>);
 }
