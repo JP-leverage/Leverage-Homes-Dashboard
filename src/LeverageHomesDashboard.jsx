@@ -1248,11 +1248,11 @@ function ListingPartnerView({ store, dir, range, lp }) {
         <span className="text-[13px]" style={{ color: T.faint }}>Pending your report — will wire in when it lands.</span>
       </div>
     </div>
-    <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <Panel title={`Appointment outcomes — ${lp}`}>{appts.length ? <Bars items={cnt(appts, (a) => a.outcome)} /> : empty("No appointments in range.")}</Panel>
       <Panel title={`Who set the appointments — ${lp}`}>{appts.length ? <Bars items={cnt(appts, (a) => a.createdBy)} tint={T.chart[2]} /> : empty("No appointments in range.")}</Panel>
     </div>
-    <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <Panel title={`Closed revenue by month — ${lp}`}>{closedByMonth.length ? <MoneyBars items={closedByMonth} fmtVal={(v) => fmt(v, "currency")} /> : empty("No closed revenue in range.")}</Panel>
       <Panel title={`Listing pipeline by stage — ${lp}`}>{pipeByStage.length ? <MoneyBars items={pipeByStage} tint={T.chart[1]} fmtVal={(v) => fmt(v, "currency")} /> : empty("No listing pipeline found for this partner.")}</Panel>
     </div>
@@ -1598,7 +1598,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </table></div>
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>Deals with a <b>Close Date in the selected period</b>. Revenue uses <b>Total Forecasted Revenue</b>. Scoped to <b>{drillLabel}</b> — a single <b>rep</b> filter narrows this; team filters touch most deals (each has both an AM and a VP).</div>
       </Panel>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title={`Deals by transaction type — ${drillLabel}`}><div style={{ height: 190 }}><ResponsiveContainer>
           <BarChart data={txByType.rows.map((x) => ({ label: x.type, value: x.deals }))} layout="vertical" margin={{ top: 0, right: 32, left: 10, bottom: 0 }}>
             <XAxis type="number" tick={{ fontSize: 10, fill: T.faint }} axisLine={false} tickLine={false} allowDecimals={false} />
@@ -1615,19 +1615,19 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           </BarChart></ResponsiveContainer></div></Panel>
       </div>
     </>) : isMktView ? (<>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
         <Panel title="Leads by marketing segmentation"><Bars items={mktLeadsBySegment.items} tint={T.chart[1]} /></Panel>
       </div>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title="Opps created by source"><Bars items={mktOppsBySource.items} tint={T.chart[3]} /></Panel>
         <Panel title={`Opps created % by segment — ${drillLabel}`}><SegPctBars data={oppsSegPct} noun="opps" /></Panel>
       </div>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title={`Appts created by source — ${drillLabel}`}>{apptsSegBySource.items.length ? <Bars items={apptsSegBySource.items} tint={T.chart[2]} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No appointments for this scope.</div>}</Panel>
         <Panel title={`Appts created % by segment — ${drillLabel}`}><SegPctBars data={apptsSegBySegment} noun="appts" /></Panel>
       </div>
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title={`Forecasted pipeline by channel — ${drillLabel}`}>{mktPipeByChannel.length ? <MoneyBars items={mktPipeByChannel} tint={T.accent} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No open pipeline for this scope.</div>}</Panel>
         <Panel title={`Closed revenue by channel — ${drillLabel}`}>{mktClosedByChannel.length ? <MoneyBars items={mktClosedByChannel} tint={T.good} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed revenue for this scope.</div>}</Panel>
       </div>
@@ -1640,7 +1640,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <ApptRoleSection store={store} dir={dir} org={org} range={range} />
     </Panel>
     {(
-    <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <Panel title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
@@ -1775,7 +1775,7 @@ export default function App() {
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
         <span className="hidden sm:inline">{iso(range.start)} → {iso(range.end)}</span>
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
-    <div className="p-3 sm:p-6 max-w-[1200px] mx-auto">{body}</div></div>);
+    <div className="p-3 sm:p-6 max-w-[1200px] mx-auto overflow-x-hidden">{body}</div></div>);
 
   if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
   if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
@@ -1789,6 +1789,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-collapsible-filters</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-no-overflow</p>
   </>);
 }
