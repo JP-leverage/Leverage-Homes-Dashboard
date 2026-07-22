@@ -727,10 +727,10 @@ const KPIS = {
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
-  appts_attended: { id: "appts_attended", label: "Appointments Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true,
+  appts_attended: { id: "appts_attended", label: "Set Appts Attended", dataset: "appointments", format: "number", higherIsBetter: true, amFuOnly: true,
     targetKey: "appts_attended", targetType: "volume",
     qualify: (r) => /met/i.test(String(r.outcome || "")) && !/no show|missed/i.test(String(r.outcome || "")), agg: (rows) => rows.length },
-  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, targetKey: "show_rate", targetType: "rate",
+  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments", format: "percent", higherIsBetter: true, amFuOnly: true, targetKey: "show_rate", targetType: "rate",
     compute: (rows) => { const scored = rows.filter((x) => { const o = String(x.outcome || "").trim(); return o && !/^no outcome$/i.test(o); });
       if (!scored.length) return 0; return scored.filter((x) => /met/i.test(x.outcome) && !/no show|missed/i.test(x.outcome)).length / scored.length; } },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing",
@@ -864,9 +864,9 @@ function orgOptions(dir, org) {
 }
 function ViewToggle({ view, setView }) {
   const tabs = [["sales", "Sales"], ["marketing", "Marketing"], ["transactions", "Transactions"], ["speedtolead", "Speed to Lead"]];
-  return (<div className="inline-flex rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+  return (<div className="flex overflow-x-auto rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}`, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
     {tabs.map(([v, l]) => (
-      <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3.5 py-1.5 rounded-md transition-colors"
+      <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3 sm:px-3.5 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0"
         style={{ background: view === v ? T.card : "transparent", color: view === v ? T.ink : T.sub, boxShadow: view === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
   </div>);
 }
@@ -892,7 +892,7 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
   const showRepFilters = viewUsesRepFilter(view); // Team/Rep are inert in those views
-  return (<div className="rounded-xl p-4 mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="rounded-xl p-3 sm:p-4 mb-4 sm:mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex flex-wrap gap-3 items-end">
       {showRepFilters && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
       {showRepFilters && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
@@ -1040,7 +1040,7 @@ function StlHero({ title, caption, rows, big, target }) {
   const hitGoal = target != null && a.med != null ? a.med <= target : null;
   const groupMed = (key, order) => {
     const m = {}; rows.forEach((r) => { const k = r[key] || "(unset)"; (m[k] = m[k] || []).push(r.elapsed); });
-    let items = Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), n: arr.length }));
+    let items = Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), avg: mean(arr), n: arr.length }));
     if (order) items = items.sort((x, y) => order.indexOf(x.label) - order.indexOf(y.label));
     else items = items.sort((x, y) => y.value - x.value); // longest on top
     return items;
@@ -1048,12 +1048,15 @@ function StlHero({ title, caption, rows, big, target }) {
   const scen = groupMed("scenario", null), prio = groupMed("priority", ["High", "Low"]), chan = groupMed("source", null);
   const globalMax = Math.max(1, ...[...scen, ...prio, ...chan].map((i) => i.value)); // one scale across the whole hero
   const THIN = 3; // fewer than this many leads = not enough to trust
-  const Row = ({ label, value, n }) => {
+  const Row = ({ label, value, avg, n }) => {
     const thin = n < THIN;
     return (<div className="flex items-center gap-3" style={{ opacity: thin ? 0.45 : 1 }}>
       <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({n})</span></div>
       <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((value / globalMax) * 100)}%`, height: "100%", background: thin ? T.faint : T.accent }} /></div>
-      <div className="text-[12px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: T.ink }}>{fmtDur(value)}</div>
+      <div className="text-right shrink-0" style={{ width: 86, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+        <div className="text-[12px]" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtDur(value)}</div>
+        <div className="text-[10px] leading-none" style={{ color: T.faint }}>avg {fmtDur(avg)}</div>
+      </div>
     </div>);
   };
   const Section = ({ label, items }) => (
@@ -1073,7 +1076,7 @@ function StlHero({ title, caption, rows, big, target }) {
         <Section label="By scenario" items={scen} />
         <Section label="By priority" items={prio} />
         <Section label="By channel" items={chan} />
-        <div className="text-[10px]" style={{ color: T.faint }}>Bars show median time-to-claim, scaled to one shared axis. Greyed rows have fewer than {THIN} leads — too few to read into.</div>
+        <div className="text-[10px]" style={{ color: T.faint }}>Bars show median time-to-claim (average beneath each), scaled to one shared axis. Greyed rows have fewer than {THIN} leads — too few to read into.</div>
       </div>)}
     </div>);
 }
@@ -1098,7 +1101,7 @@ function SpeedToLeadView({ store, range }) {
 
 const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
-  leading: ["opps_created", "leads_claimed", "leads_deaded", "appointments", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
+  leading: ["opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
 function CardGrid({ ids, results, breakouts, sparks, big }) {
   const min = big ? 300 : 248;
@@ -1253,7 +1256,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
   const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
@@ -1760,14 +1763,14 @@ export default function App() {
     return () => { alive = false; }; }, []);
 
   const shell = (body) => (<div className="min-h-screen w-full" style={{ background: T.canvas, ...FONT }}>
-    <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${T.border}`, background: T.card }}>
+    <div className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${T.border}`, background: T.card }}>
       <div className="flex items-center gap-3"><div className="w-2 h-6 rounded-sm" style={{ background: T.accent }} />
         <div><div className="text-[15px] font-semibold" style={{ color: T.ink }}>Leverage Homes</div><div className="text-[11px]" style={{ color: T.faint }}>Executive Dashboard</div></div></div>
       <div className="text-[11px] flex items-center gap-2" style={{ color: T.faint }}>
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
-        <span>{iso(range.start)} → {iso(range.end)}</span>
+        <span className="hidden sm:inline">{iso(range.start)} → {iso(range.end)}</span>
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
-    <div className="p-6 max-w-[1200px] mx-auto">{body}</div></div>);
+    <div className="p-3 sm:p-6 max-w-[1200px] mx-auto">{body}</div></div>);
 
   if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
   if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
@@ -1781,6 +1784,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · full-period-targets</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · stl-subset-avg</p>
   </>);
 }
