@@ -147,10 +147,15 @@ const DATASETS = {
     dedupe: (r) => r.id, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   contracts_sent: {
+    // Tasks workbook — "Contracts Sent x YTD - VPs" tab. Standard Salesforce Activity export
+    // (same shape as the Talk Time tabs): one row per "Contract Sent" activity, credited to the
+    // Assigned rep (VP), dated by Created Date. VP-only via the KPI's vpOnly gate; a few non-VP
+    // strays can appear in Assigned (data hygiene) — see note. To lock rows to VPs only, add a
+    // role check in the KPI qualify.
     workbook: "tasks",
-    require: ["Contract Sent", "Date of Contract Sent", "Opportunity Owner"], exclude: [], tabInclude: /Contracts Sent/i,
-    schema: { name: "Opportunity Name", owner: "Opportunity Owner", aripDate: "Arip Date", flag: "Contract Sent", aripCount: "Arip Count", date: "Date of Contract Sent" },
-    dedupe: null, dateField: "date", dateCandidates: ["Date of Contract Sent"], repField: "owner",
+    require: ["Assigned", "Subject", "Created Date"], exclude: [], tabInclude: /Contracts Sent/i,
+    schema: { id: "Activity ID", account: "Company / Account", name: "Opportunity", subject: "Subject", owner: "Assigned" },
+    dedupe: (r) => r.id, dateField: "date", dateCandidates: ["Created Date"], repField: "owner",
   },
   arip_entered: {
     workbook: "opportunities",
@@ -573,7 +578,7 @@ function lpScopeName(dir, org) {
 }
 // True when the current scope is a VP (a VP team or a single VP rep). Directory-driven:
 // every rep resolved in scope must be a VP. Used to gate VP-only KPIs (e.g. Contracts Sent,
-// which is tracked by Opportunity Owner = the VP). Falls back to name-based detection if the
+// which is tracked by the Assigned rep = the VP). Falls back to name-based detection if the
 // directory hasn't loaded. The unfiltered "All" view is never VP scope.
 function isVpScope(dir, org) {
   const isVP = (role) => /vice\s*president|\bvp\b/i.test(String(role || ""));
@@ -751,7 +756,7 @@ const KPIS = {
     qualify: (r) => isAripOut(r.newValue),
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
-    targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
+    targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.subject).trim().toLowerCase() === "contract sent", agg: (rows) => rows.length },
   appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true,
     targetKey: "appts_attended", targetType: "volume",
     qualify: (r) => !r.lpAssigned && apptAttended(r.outcome), agg: (rows) => rows.length },
@@ -1910,6 +1915,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · outcome-donuts</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · contracts-sent-activity</p>
   </>);
 }
