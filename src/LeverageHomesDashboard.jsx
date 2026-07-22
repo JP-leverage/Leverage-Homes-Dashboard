@@ -1102,7 +1102,7 @@ function SpeedToLeadView({ store, range }) {
       {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
         <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
       <StlHero big target={stlGoal} title="Speed to Lead — Blended" caption="Median time from lead in → claimed · all leads, all windows & channels" rows={rows} />
-      <div className="grid gap-5" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <StlHero title="Accountable Window" caption="Weekdays 10am–7pm — the scored window" rows={b("primary")} />
         <StlHero title="Out of Window" caption="Weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
         <StlHero title="Weekend" caption="Saturday & Sunday — context, not scored" rows={b("weekend")} />
@@ -1547,10 +1547,10 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <Panel title={`Median days · ARIP → Close by transaction type — ${drillLabel}`}>
         {txMedians.length ? (<div className="flex flex-col gap-3 pt-1">
           {txMedians.map((x) => { const mx = Math.max(...txMedians.map((t) => t.value)) || 1; return (
-            <div key={x.label} className="flex items-center gap-4">
-              <div className="text-[15px] shrink-0" style={{ width: 210, color: T.ink }}>{x.label} <span style={{ color: T.faint }}>({x.closed} closed)</span></div>
-              <div className="flex-1 h-4 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((x.value / mx) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
-              <div className="text-[26px] font-bold text-right shrink-0" style={{ width: 140, fontVariantNumeric: "tabular-nums", color: T.ink }}>{Math.round(x.value)} <span className="text-[13px] font-normal" style={{ color: T.faint }}>days</span></div>
+            <div key={x.label} className="flex items-center gap-3">
+              <div className="text-[15px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{x.label} <span style={{ color: T.faint }}>({x.closed} closed)</span></div>
+              <div className="hidden sm:block flex-1 h-4 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 280 }}><div style={{ width: `${Math.round((x.value / mx) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
+              <div className="text-[22px] sm:text-[26px] font-bold text-right shrink-0" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{Math.round(x.value)} <span className="text-[12px] font-normal" style={{ color: T.faint }}>days</span></div>
             </div>); })}
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
         <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
@@ -1565,7 +1565,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
       <Panel title={`Transaction summary — ${drillLabel}`}>
-        <div style={{ overflowX: "auto" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 760 }}>
           <thead><tr style={{ color: T.faint, textAlign: "right" }}>
             {["Transaction type", "Deals", "Open", "Closed", "Forecasted rev", "Net rev", "Avg (forecast)", "% deals", "% rev"].map((h, i) => (
               <th key={h} className="py-2 px-2" style={{ textAlign: i === 0 ? "left" : "right", borderBottom: `1px solid ${T.border}` }}>{h}</th>))}
@@ -1669,7 +1669,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </BarChart></ResponsiveContainer></div></Panel>
     <Panel title={`Appt Set → ARIP — ${drillLabel} (appointment funnel)`}>
       <Bars items={apptFunnel.items} tint={T.chart[2]} />
-      <div className="grid gap-3 mt-3 pt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)", borderTop: `1px solid ${T.border}` }}>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
         {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
           <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
             <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
@@ -1677,7 +1677,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
     </Panel>
     <Panel title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
-      <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 520 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Team</th>
           <th className="pb-2 font-medium text-right">Closed Revenue</th><th className="pb-2 font-medium text-right">Deals</th><th className="pb-2 font-medium text-right">Avg Deal</th></tr></thead>
@@ -1687,10 +1687,10 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
           : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals in this scope.</td></tr>)}</tbody>
-      </table></Panel>
+      </table></div></Panel>
     <Panel title="Rep scorecard">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
-      <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 780 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
           <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Opps Assigned</th><th className="pb-2 font-medium text-right">Opps Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
@@ -1709,7 +1709,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.shownAttended.toLocaleString()}</td>
           <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>))}</tbody>
-      </table></Panel>
+      </table></div></Panel>
     <Panel title="Appointment outcomes (all appointments in scope)">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
       <div className="flex flex-col gap-2">{outcomeMix.items.map((o) => (
@@ -1789,6 +1789,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · sticky-filter-clip</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-audit-pass</p>
   </>);
 }
