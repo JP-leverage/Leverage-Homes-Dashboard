@@ -892,11 +892,18 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
   const opts = orgOptions(dir, org);
   const showRepFilters = viewUsesRepFilter(view); // Team/Rep are inert in those views
+  const [open, setOpen] = useState(false); // mobile-only: filters collapsed by default to free screen
+  const periodLabel = (DATE_PRESETS.find(([v]) => v === date.preset) || [null, date.preset])[1];
+  const scopeLabel = !showRepFilters ? "Company" : org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : "All reps";
   return (<div className="rounded-xl p-3 sm:p-4 mb-4 sm:mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
-    <div className="flex flex-wrap gap-3 items-end">
+    <button onClick={() => setOpen((o) => !o)} className="sm:hidden w-full flex items-center justify-between">
+      <span className="text-[13px]" style={{ color: T.sub }}>Filters · <span style={{ color: T.ink, fontWeight: 600 }}>{scopeLabel} · {periodLabel}</span></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}><path d="M6 9l6 6 6-6" stroke={T.faint} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
+    <div className={`${open ? "flex" : "hidden"} sm:flex flex-wrap gap-3 items-end mt-3 sm:mt-0`}>
       {showRepFilters && <Select label="Team" value={org.team} onChange={set("team")} options={opts.team} />}
       {showRepFilters && <Select label="Rep" value={org.rep} onChange={set("rep")} options={opts.rep} />}
-      {showRepFilters && <div className="w-px self-stretch mx-1" style={{ background: T.border }} />}
+      {showRepFilters && <div className="w-px self-stretch mx-1 hidden sm:block" style={{ background: T.border }} />}
       <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Period</span>
         <select value={date.preset} onChange={(e) => setDate({ ...date, preset: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
           style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>{DATE_PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
@@ -1782,6 +1789,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · deals-charts-all-view</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-collapsible-filters</p>
   </>);
 }
