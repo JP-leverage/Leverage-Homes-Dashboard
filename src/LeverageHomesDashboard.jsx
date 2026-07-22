@@ -165,18 +165,22 @@ const DATASETS = {
     schema: { name: "Opportunity Name", rep: "Created By", flag: "Deals to Arip", apptType: "Appointment Type", aripDate: "Arip Date" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep",
   },
+  // Appointments SET — volume of appointments created, dated by Created Date.
+  // Reads the Segment x Source tab (only appt tab carrying a Start column) so Set and Attended share one source.
   appointments: {
     workbook: "activities",
-    require: ["Appointment Outcome", "Event Type"], exclude: [], tabInclude: /Appointments YTD x Month/i,
-    schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned",
+    require: ["Appointment Outcome", "Start"], exclude: [], tabInclude: /Segment x Source/i,
+    schema: { name: "Opportunity Name", subject: "Subject", createdBy: "Created By", rep: "Assigned",
       outcome: "Appointment Outcome", eventType: "Event Type" },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy",
   },
+  // Appointments ATTENDED / Show Rate — dated by Start (when the appointment actually occurred).
   appointments_attended: {
     workbook: "activities",
-    require: ["Appointment Outcome", "Event Type"], exclude: [], tabInclude: /Appointments YTD x Month/i,
-    schema: { subject: "Subject", createdBy: "Created By", rep: "Assigned", outcome: "Appointment Outcome", eventType: "Event Type" },
-    dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "rep",
+    require: ["Appointment Outcome", "Start"], exclude: [], tabInclude: /Segment x Source/i,
+    schema: { name: "Opportunity Name", subject: "Subject", createdBy: "Created By", rep: "Assigned",
+      outcome: "Appointment Outcome", eventType: "Event Type" },
+    dedupe: null, dateField: "date", dateCandidates: ["Start"], repField: "createdBy",
   },
   appts_seg: {
     workbook: "activities",
@@ -696,6 +700,16 @@ const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org,
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
 const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues", "Probate"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
+// Appointment outcome semantics (JP spec):
+//   attended  = "Appointment Met" ONLY. Anything containing "no show" / "missed" is a miss —
+//               including "Attended, No Show", which counts toward the total but not as attended.
+//   excluded  = Cancelled / Rescheduled (dropped from the show-rate calc entirely)
+//   scheduled (show-rate denominator) = every appt with a Start in window EXCEPT the excluded ones —
+//     this INCLUDES blanks, no-shows, and "Attended, No Show", so they count against the rate
+const apptExcluded = (o) => /cancel|reschedul/i.test(String(o ?? ""));
+const apptAttended = (o) => { const s = String(o ?? "").trim().toLowerCase();
+  if (/no show|missed/.test(s)) return false;
+  return /appointment met/.test(s) || s === "met"; };
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
@@ -727,12 +741,13 @@ const KPIS = {
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.flag).trim().toLowerCase() === "yes", agg: (rows) => rows.length },
-  appts_attended: { id: "appts_attended", label: "Set Appts Attended", dataset: "appointments", format: "number", higherIsBetter: true, amFuOnly: true,
+  appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true,
     targetKey: "appts_attended", targetType: "volume",
-    qualify: (r) => /met/i.test(String(r.outcome || "")) && !/no show|missed/i.test(String(r.outcome || "")), agg: (rows) => rows.length },
-  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments", format: "percent", higherIsBetter: true, amFuOnly: true, targetKey: "show_rate", targetType: "rate",
-    compute: (rows) => { const scored = rows.filter((x) => { const o = String(x.outcome || "").trim(); return o && !/^no outcome$/i.test(o); });
-      if (!scored.length) return 0; return scored.filter((x) => /met/i.test(x.outcome) && !/no show|missed/i.test(x.outcome)).length / scored.length; } },
+    qualify: (r) => apptAttended(r.outcome), agg: (rows) => rows.length },
+  show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, amFuOnly: true, targetKey: "show_rate", targetType: "rate",
+    subStat: () => "Met ÷ scheduled · excl. cancelled&rescheduled (blanks count against)",
+    compute: (rows) => { const denom = rows.filter((x) => !apptExcluded(x.outcome));
+      if (!denom.length) return 0; return denom.filter((x) => apptAttended(x.outcome)).length / denom.length; } },
   leads: { id: "leads", label: "Leads", dataset: "leads", format: "number", domain: "marketing",
     targetKey: "leads", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   leads_call_center: { id: "leads_call_center", label: "Call Center", dataset: "leads", format: "number", domain: "marketing", targetKey: "leads_call_center", targetType: "volume", higherIsBetter: true,
@@ -1127,10 +1142,11 @@ function SubHead({ label, note }) {
 // Role-aware appointment stats. Setter axis = "Created By"; attendee axis = "Assigned".
 // scored = has a real outcome; met = attended (appointment met, not no-show/missed).
 function apptStats(store, dir, range) {
-  const rows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
+  // Attended + Show Rate run off Start date. scored = show-rate denominator (excl. cancelled/rescheduled); met = attended (Met + blank).
+  const rows = applyFilters(store.appointments_attended || [], DATASETS.appointments_attended, ALL_ORG, range, dir);
   const key = (v) => String(v ?? "").trim();
-  const scored = (o) => { const s = key(o.outcome).toLowerCase(); return !!s && s !== "no outcome"; };
-  const met = (o) => /met/i.test(key(o.outcome)) && !/no show|missed/i.test(key(o.outcome));
+  const scored = (o) => !apptExcluded(o.outcome);
+  const met = (o) => apptAttended(o.outcome);
   const S = {}, A = {};
   rows.forEach((o) => {
     const setter = key(o.createdBy), att = key(o.rep), sc = scored(o), mt = met(o);
@@ -1175,19 +1191,19 @@ function ApptRoleSection({ store, dir, org, range }) {
     const totMet = members.reduce((s, e) => s + e.met, 0), totScored = members.reduce((s, e) => s + e.scored, 0);
     if (metric === "rate") {
       const items = members.map((e) => ({ label: e.rep, pct: rateOf(e) })).filter((x) => x.pct != null).sort((a, b) => b.pct - a.pct);
-      return <ApptCard key={keyp} title={`Show Rate — ${groupLabel}`} bigText={totScored ? (totMet / totScored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scored · per ${noun}`} items={items} kind="rate" />;
+      return <ApptCard key={keyp} title={`Show Rate — ${groupLabel}`} bigText={totScored ? (totMet / totScored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scheduled · excl. cancelled&rescheduled · per ${noun}`} items={items} kind="rate" />;
     }
     const items = members.map((e) => ({ label: e.rep, value: e.met })).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
-    return <ApptCard key={keyp} title={`Appts Attended — ${groupLabel}`} bigText={totMet.toLocaleString()} caption={`Met appts · per ${noun}`} items={items} kind="count" />;
+    return <ApptCard key={keyp} title={`Appts Attended — ${groupLabel}`} bigText={totMet.toLocaleString()} caption={`Attended (Met) · per ${noun}`} items={items} kind="count" />;
   };
   const singleCard = (e, metric, breakoutNoun, keyp) => {
     const by = Object.values(e.by).filter((b) => !inDir || inDir.has(b.label));
     if (metric === "rate") {
       const items = by.map((b) => ({ label: b.label, pct: b.scored ? b.met / b.scored : null })).filter((x) => x.pct != null).sort((a, b) => b.pct - a.pct);
-      return <ApptCard key={keyp} title="Show Rate" bigText={e.scored ? (e.met / e.scored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scored · per ${breakoutNoun}`} items={items} kind="rate" />;
+      return <ApptCard key={keyp} title="Show Rate" bigText={e.scored ? (e.met / e.scored * 100).toFixed(1) + "%" : "—"} caption={`Met ÷ scheduled · excl. cancelled&rescheduled · per ${breakoutNoun}`} items={items} kind="rate" />;
     }
     const items = by.map((b) => ({ label: b.label, value: b.met })).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
-    return <ApptCard key={keyp} title="Appts Attended" bigText={e.met.toLocaleString()} caption={`Met appts · per ${breakoutNoun}`} items={items} kind="count" />;
+    return <ApptCard key={keyp} title="Appts Attended" bigText={e.met.toLocaleString()} caption={`Attended (Met) · per ${breakoutNoun}`} items={items} kind="count" />;
   };
 
   let cards = [];
@@ -1445,24 +1461,26 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const scorecard = useMemo(() => {
     const oppRows  = applyFilters(store.opps_created || [], DATASETS.opps_created, ALL_ORG, range, dir);
     const callRows = applyFilters(store.calls || [],        DATASETS.calls,        ALL_ORG, range, dir);
-    const apptRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);
+    const apptSetRows = applyFilters(store.appointments || [], DATASETS.appointments, ALL_ORG, range, dir);            // Set → Created Date
+    const apptAttRows = applyFilters(store.appointments_attended || [], DATASETS.appointments_attended, ALL_ORG, range, dir); // Attended/Show Rate → Start
     const assignedRows = applyFilters(store.opps_assigned || [], DATASETS.opps_assigned, ALL_ORG, range, dir);
     const deadedRows = applyFilters(store.opps_deaded || [], DATASETS.opps_deaded, ALL_ORG, range, dir);
     const aripRows = applyFilters(store.arip || [], DATASETS.arip, ALL_ORG, range, dir);
     const enteredRows = applyFilters(store.arip_entered || [], DATASETS.arip_entered, ALL_ORG, range, dir);
     const key = (v) => String(v ?? "").trim();
-    const isMet = (o) => /appointment met/i.test(String(o || ""));
     const M = {};
-    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, oppsAssigned: 0, oppsDeaded: 0, oppsArip: 0, aripReview: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, apptsAssigned: 0, attended: 0 });
+    const ensure = (k) => (M[k] = M[k] || { rep: k, oppsCreated: 0, oppsAssigned: 0, oppsDeaded: 0, oppsArip: 0, aripReview: 0, minutes: 0, qcs: 0, apptsSet: 0, setMet: 0, setSched: 0, apptsAssigned: 0, attended: 0, attSched: 0 });
     oppRows.forEach((r) => { const k = key(r.createdBy); if (k) ensure(k).oppsCreated += 1; });
     assignedRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).oppsAssigned += 1; });
     deadedRows.forEach((r) => { const k = key(r.rep); if (k) ensure(k).oppsDeaded += 1; });
     enteredRows.forEach((r) => { const roles = new Set([r.owner, r.acqManager, r.acqManager2, r.followUp].map(key).filter(Boolean)); roles.forEach((k) => ensure(k).oppsArip += 1); });
     aripRows.forEach((r) => { if (String(r.newValue).trim() === "Deal Review" && Number(r.outArip) === 1) { const k = key(r.rep); if (k) ensure(k).aripReview += 1; } });
     callRows.forEach((r) => { const k = key(r.rep); if (!k) return; const e = ensure(k); e.minutes += num(r.durationMin); if (isQC(r)) e.qcs += 1; });
-    apptRows.forEach((r) => {
-      const s = key(r.createdBy); if (s) { const e = ensure(s); e.apptsSet += 1; if (isMet(r.outcome)) e.setMet += 1; }
-      const a = key(r.rep);       if (a) { const e = ensure(a); e.apptsAssigned += 1; if (isMet(r.outcome)) e.attended += 1; }
+    apptSetRows.forEach((r) => { const s = key(r.createdBy); if (s) ensure(s).apptsSet += 1; });        // Set = created in window (all outcomes)
+    apptAttRows.forEach((r) => {
+      const sched = !apptExcluded(r.outcome), att = apptAttended(r.outcome);                             // Start in window
+      const s = key(r.createdBy); if (s) { const e = ensure(s); if (sched) e.setSched += 1; if (att) e.setMet += 1; }
+      const a = key(r.rep);       if (a) { const e = ensure(a); e.apptsAssigned += 1; if (sched) e.attSched += 1; if (att) e.attended += 1; }
     });
     const scope = repsInScope(dir, org);
     const isVP = (role) => /vice\s*president|\bvp\b/i.test(String(role || ""));
@@ -1470,12 +1488,12 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       .filter((x) => scope ? scope.has(x.rep) : (!inDir || inDir.has(x.rep)))
       .map((x) => { const role = dir.byRep[x.rep]?.role, vp = isVP(role);
         const attendeePrimary = vp || (x.apptsSet === 0 && x.apptsAssigned > 0);
-        const denom = attendeePrimary ? x.apptsAssigned : x.apptsSet, numer = attendeePrimary ? x.attended : x.setMet;
+        const denom = attendeePrimary ? x.attSched : x.setSched, numer = attendeePrimary ? x.attended : x.setMet;
         return { ...x, team: dir.byRep[x.rep]?.team, role, vp, attendeePrimary, shownAttended: attendeePrimary ? x.attended : x.setMet, rate: denom ? numer / denom : null }; })
       .sort((a, b) => b.oppsCreated - a.oppsCreated || b.minutes - a.minutes);
   }, [store, dir, org, range, inDir]);
   const outcomeMix = useMemo(() => {
-    const rows = applyFilters(store.appointments || [], DATASETS.appointments, org, range, dir);
+    const rows = applyFilters(store.appointments_attended || [], DATASETS.appointments_attended, org, range, dir);
     const m = {}; rows.forEach((r) => { const o = String(r.outcome || "").trim() || "(blank)"; m[o] = (m[o] || 0) + 1; });
     const total = rows.length || 1;
     return { total: rows.length, items: Object.entries(m).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count) };
@@ -1788,6 +1806,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · cleanup-pass</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · attended-noshow-guard</p>
   </>);
 }
