@@ -1037,6 +1037,7 @@ function stlAgg(rows) { // pooled avg + median across the given rows
 }
 function StlHero({ title, caption, rows, big, target }) {
   const a = stlAgg(rows);
+  const newLeads = big ? stlAgg(rows.filter((r) => /new leads/i.test(String(r.scenario)))) : null; // "New Leads" scenario only
   const hitGoal = target != null && a.med != null ? a.med <= target : null;
   const groupMed = (key, order) => {
     const m = {}; rows.forEach((r) => { const k = r[key] || "(unset)"; (m[k] = m[k] || []).push(r.elapsed); });
@@ -1051,7 +1052,7 @@ function StlHero({ title, caption, rows, big, target }) {
   const Row = ({ label, value, avg, n }) => {
     const thin = n < THIN;
     return (<div className="flex items-center gap-3" style={{ opacity: thin ? 0.45 : 1 }}>
-      <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({n})</span></div>
+      <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({n.toLocaleString()} leads)</span></div>
       <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((value / globalMax) * 100)}%`, height: "100%", background: thin ? T.faint : T.accent }} /></div>
       <div className="text-right shrink-0" style={{ width: 86, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
         <div className="text-[12px]" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtDur(value)}</div>
@@ -1068,7 +1069,10 @@ function StlHero({ title, caption, rows, big, target }) {
         <span className="text-[13px] font-medium" style={{ color: T.sub }}>{title}</span>
         <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
       </div>
-      <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: hitGoal == null ? T.ink : hitGoal ? T.good : T.bad, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
+      <div className="flex items-end gap-3 flex-wrap">
+        <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: hitGoal == null ? T.ink : hitGoal ? T.good : T.bad, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
+        {newLeads && newLeads.n > 0 && (<div className="text-[13px] pb-1" style={{ color: T.sub }}>New Leads <span className="font-semibold" style={{ color: T.ink, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{fmtDur(newLeads.med)}</span> <span style={{ color: T.faint }}>· {newLeads.n.toLocaleString()} leads · median</span></div>)}
+      </div>
       <div className="text-[11px]" style={{ color: T.faint }}>{caption}</div>
       <div className="text-[11px]" style={{ color: T.faint }}>median · avg {fmtDur(a.avg)} · {a.n.toLocaleString()} leads</div>
       {target != null && (<div className="text-[11px] font-medium" style={{ color: hitGoal ? T.good : T.bad }}>Goal ≤ {fmtDur(target)} · {a.med == null ? "—" : hitGoal ? "on track" : `over by ${fmtDur(a.med - target)}`}</div>)}
@@ -1784,6 +1788,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · stl-subset-avg</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · stl-leads-label</p>
   </>);
 }
