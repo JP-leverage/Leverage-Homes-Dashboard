@@ -620,6 +620,29 @@ function monthsInRange(start, end) {
   }
   return total || 1 / 30.4;
 }
+// Inclusive Mon–Fri count between two dates (date-only).
+function businessDaysBetween(start, end) {
+  let s = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  let n = 0;
+  while (s <= e) { const d = s.getDay(); if (d !== 0 && d !== 6) n++; s.setDate(s.getDate() + 1); }
+  return n;
+}
+// Business-day analog of monthsInRange: a full month = 1.0 (so a quarter = 3.0, year = 12.0);
+// partial/current periods prorate by business days within the month, and weekends contribute nothing.
+function businessMonthsInRange(start, end) {
+  const s = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  let total = 0, y = s.getFullYear(), m = s.getMonth();
+  while (y < e.getFullYear() || (y === e.getFullYear() && m <= e.getMonth())) {
+    const mStart = new Date(y, m, 1), mEnd = new Date(y, m + 1, 0);
+    const from = s > mStart ? s : mStart, to = e < mEnd ? e : mEnd;
+    const bizMonth = businessDaysBetween(mStart, mEnd);
+    if (bizMonth) total += businessDaysBetween(from, to) / bizMonth;
+    m++; if (m > 11) { m = 0; y++; }
+  }
+  return total;
+}
 function parseDate(v) {
   if (v == null || v === "") return null;
   if (v instanceof Date) return isNaN(v) ? null : v;
@@ -760,7 +783,7 @@ function resolveTarget(kpi, store, org, range) {
   let base = null;
   for (const [scope, val] of tries) { const hit = rows.find((t) => t.scope === scope && t.scopeValue === val); if (hit) { base = num(hit.value); break; } }
   if (base == null) return null;
-  return kpi.targetType === "rate" ? base : base * monthsInRange(range.start, range.end);
+  return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
 }
 function computeKpi(kpi, store, dir, org, range) {
   const ds = DATASETS[kpi.dataset];
@@ -1255,7 +1278,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
       if (!hit) return null;
       const base = num(hit.value);
-      return kpi.targetType === "rate" ? base : base * monthsInRange(range.start, range.end);
+      return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
     };
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
@@ -1758,6 +1781,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · loading-progress</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · business-day-targets</p>
   </>);
 }
