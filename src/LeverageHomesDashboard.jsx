@@ -1632,7 +1632,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Setters (AMs) are scored on the appointments they <b>set</b> that were met, broken out per closer; VPs on appointments <b>assigned</b> to them, broken out per setter. On the All view both groups are shown side by side.</div>
       <ApptRoleSection store={store} dir={dir} org={org} range={range} />
     </Panel>
-    {(org.rep !== "All" || org.team !== "All" || org.role !== "All" || org.department !== "All") ? (
+    {(
     <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr" }}>
       <Panel title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
@@ -1651,12 +1651,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
-    ) : (
-    <Panel title="Deals · by scope">
-      <div className="text-[13px] py-6 text-center" style={{ color: T.sub }}>
-        Deal breakdowns are scope-specific. Pick a <b>team</b> or <b>rep</b> in the filter bar to see the <b>Close Date × Projected Rev</b> and <b>Stage × Projected Rev</b> charts for them.
-      </div>
-    </Panel>
     )}
     <Panel title={`Closed revenue by month — ${drillLabel} (Total Net Revenue · all months)`}><div style={{ height: 200 }}><ResponsiveContainer>
       <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
@@ -1788,6 +1782,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · stl-leads-label</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · deals-charts-all-view</p>
   </>);
 }
