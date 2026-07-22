@@ -67,6 +67,7 @@ function stlBucket(startDate) {
   const h = d.getHours(); return (h >= 10 && h < 19) ? "primary" : "outwindow"; // 10am–7pm
 }
 const mean = (arr) => (arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : 0);
+const plural = (n, word) => `${(n || 0).toLocaleString()} ${word}${n === 1 ? "" : "s"}`; // "1 lead" / "2 leads"
 // Adaptive duration format: 42s / 3m 20s / 1h 14m
 function fmtDur(sec) {
   if (sec == null || isNaN(sec)) return "—";
@@ -814,7 +815,7 @@ function resolveTarget(kpi, store, org, range) {
   tries.push(["Company", org.company === "All" ? "Leverage Homes" : org.company]);
   let base = null;
   for (const [scope, val] of tries) { const hit = rows.find((t) => t.scope === scope && t.scopeValue === val); if (hit) { base = num(hit.value); break; } }
-  if (base == null) return null;
+  if (!base) return null; // 0 / blank Column F -> treat as "no target set" rather than a $0 target
   return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
 }
 function computeKpi(kpi, store, dir, org, range, targetRange) {
@@ -980,7 +981,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
     </div>);
   };
-  return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="rounded-xl p-4 flex flex-col gap-3 h-full" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
@@ -1091,7 +1092,7 @@ function StlHero({ title, caption, rows, big, target }) {
   const Row = ({ label, value, avg, n }) => {
     const thin = n < THIN;
     return (<div className="flex items-center gap-3" style={{ opacity: thin ? 0.45 : 1 }}>
-      <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({n.toLocaleString()} leads)</span></div>
+      <div className="text-[12px] shrink-0 truncate" style={{ width: big ? 168 : 128, color: T.sub }} title={label}>{label} <span style={{ color: T.faint }}>({plural(n, "lead")})</span></div>
       <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((value / globalMax) * 100)}%`, height: "100%", background: thin ? T.faint : T.accent }} /></div>
       <div className="text-right shrink-0" style={{ width: 86, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
         <div className="text-[12px]" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtDur(value)}</div>
@@ -1110,10 +1111,10 @@ function StlHero({ title, caption, rows, big, target }) {
       </div>
       <div className="flex items-end gap-3 flex-wrap">
         <div className="font-bold leading-none tracking-tight" style={{ fontSize: big ? 64 : 34, color: hitGoal == null ? T.ink : hitGoal ? T.good : T.bad, fontVariantNumeric: "tabular-nums" }}>{fmtDur(a.med)}</div>
-        {newLeads && newLeads.n > 0 && (<div className="text-[13px] pb-1" style={{ color: T.sub }}>New Leads <span className="font-semibold" style={{ color: T.ink, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{fmtDur(newLeads.med)}</span> <span style={{ color: T.faint }}>· {newLeads.n.toLocaleString()} leads · median</span></div>)}
+        {newLeads && newLeads.n > 0 && (<div className="text-[13px] pb-1" style={{ color: T.sub }}>New Leads <span className="font-semibold" style={{ color: T.ink, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{fmtDur(newLeads.med)}</span> <span style={{ color: T.faint }}>· {plural(newLeads.n, "lead")} · median</span></div>)}
       </div>
       <div className="text-[11px]" style={{ color: T.faint }}>{caption}</div>
-      <div className="text-[11px]" style={{ color: T.faint }}>median · avg {fmtDur(a.avg)} · {a.n.toLocaleString()} leads</div>
+      <div className="text-[11px]" style={{ color: T.faint }}>median · avg {fmtDur(a.avg)} · {plural(a.n, "lead")}</div>
       {target != null && (<div className="text-[11px] font-medium" style={{ color: hitGoal ? T.good : T.bad }}>Goal ≤ {fmtDur(target)} · {a.med == null ? "—" : hitGoal ? "on track" : `over by ${fmtDur(a.med - target)}`}</div>)}
       {big && a.n > 0 && (<div className="flex flex-col gap-5 pt-3 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
         <Section label="By scenario" items={scen} />
@@ -1144,7 +1145,7 @@ function SpeedToLeadView({ store, range }) {
 
 const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
-  leading: ["opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "opps_to_arip", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
+  leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
 function CardGrid({ ids, results, breakouts, sparks, big }) {
   const min = big ? 300 : 248;
@@ -1416,6 +1417,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
       if (!hit) return null;
       const base = num(hit.value);
+      if (!base) return null; // blank Column F -> no per-rep target (drops the "/ 0" line)
       return kpi.targetType === "rate" ? base : base * businessMonthsInRange(rangeFwd.start, rangeFwd.end);
     };
     cards.forEach((id) => {
@@ -1426,6 +1428,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         if (custom.length) { out[id] = { items: custom, custom: true }; return; }
       }
       if (ds.companyScope || !(ds.repField || ds.repFields)) { out[id] = null; return; }
+      if (org.rep !== "All") { out[id] = null; return; } // single rep: the mini-bar just repeats the headline number — drop it (custom breakouts above still render)
       let primary = kpi.breakoutRep || ds.repField || (ds.repFields && ds.repFields[0]);
       if (!primary) { out[id] = null; return; }
       // When a team/role/rep is filtered and the dataset carries the role fields, break out by
@@ -1681,14 +1684,14 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
         <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
-      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
+      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
           <YAxis type="category" dataKey="label" tick={{ fontSize: 12, fill: T.sub }} axisLine={false} tickLine={false} width={168} interval={0} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={T.accent} maxBarSize={22}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 11, fill: T.sub }} /></Bar>
         </BarChart></ResponsiveContainer></div>
-        <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div>
+        <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div></>) : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No open pipeline for this scope in the selected period.</div>}
       </Panel>
       <Panel title={`Transaction summary — ${drillLabel}`}>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 760 }}>
@@ -1893,10 +1896,16 @@ export default function App() {
       catch (e) { if (alive) setSt((s) => ({ ...s, loading: false, error: String(e.message || e) })); } })();
     return () => { alive = false; }; }, []);
 
+  // Self-labeling subtitle: show the active rep/team scope so a printed/exported page is unambiguous.
+  // Marketing & Speed-to-Lead ignore Team/Rep (company-wide), so we don't show a rep scope there.
+  const scopeText = viewUsesRepFilter(view)
+    ? (org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : "All reps")
+    : "Company";
+  const periodText = (DATE_PRESETS.find(([v]) => v === date.preset) || [null, date.preset])[1];
   const shell = (body) => (<div className="min-h-screen w-full" style={{ background: T.canvas, ...FONT }}>
     <div className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${T.border}`, background: T.card }}>
       <div className="flex items-center gap-3"><div className="w-2 h-6 rounded-sm" style={{ background: T.accent }} />
-        <div><div className="text-[15px] font-semibold" style={{ color: T.ink }}>Leverage Homes</div><div className="text-[11px]" style={{ color: T.faint }}>Executive Dashboard</div></div></div>
+        <div><div className="text-[15px] font-semibold" style={{ color: T.ink }}>Leverage Homes</div><div className="text-[11px]" style={{ color: T.faint }}>Executive Dashboard · <span style={{ color: T.sub }}>{scopeText}</span> · {periodText}</div></div></div>
       <div className="text-[11px] flex items-center gap-2" style={{ color: T.faint }}>
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
         <span className="hidden sm:inline">{iso(range.start)} → {iso(range.end)}</span>
@@ -1915,6 +1924,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · contracts-sent-activity</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · polish-pass</p>
   </>);
 }
