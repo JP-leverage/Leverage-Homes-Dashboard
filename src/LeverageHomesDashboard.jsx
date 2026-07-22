@@ -1011,7 +1011,7 @@ function Notes({ diagnostics, mode, freshness }) {
   return (<div className="rounded-xl p-4 mb-5" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
     <div className="text-[13px] font-semibold mb-1" style={{ color: T.warn }}>Data notes</div>
     <ul className="text-[12px] flex flex-col gap-1" style={{ color: T.ink }}>
-      <li>Seven workbooks are wired: Opportunities, Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Context (directory). Date filtering is active on every dataset that carries a date column.</li>
+      <li>Ten workbooks are wired: Opportunities (Pt 1 &amp; 2), Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Transactions, Speed to Lead, and Context (directory). Date filtering is active on every dataset that carries a date column.</li>
       {freshness && freshness.length > 0 && <li><b>Data current through:</b> {freshness.map((f) => `${f.label} ${fmtD(f.date)}`).join("  ·  ")}. Workbooks sync on different schedules, so very recent windows (Today/Yesterday) can look sparse for a source that hasn't caught up — e.g. calls typically lag a day or two.</li>}
       {mode === "google" && diagnostics.map((d) => <li key={d.dataset} style={{ color: T.warn }}>⧗ {d.dataset}: {d.note}</li>)}
     </ul></div>);
@@ -1430,7 +1430,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.forecast); });
     return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })).slice(-12); }, [store, org, dir]);
   const drillLabel = org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : org.company !== "All" ? org.company : "All reps";
-  const credit = useMemo(() => creditRole(org), [org]);
   const leaderboard = useMemo(() => {
     const scope = repsInScope(dir, org);
     const RF = DATASETS.closed_opps.repFields; // owner/VP + AM + AM2 + follow-up
@@ -1568,31 +1567,31 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 760 }}>
           <thead><tr style={{ color: T.faint, textAlign: "right" }}>
             {["Transaction type", "Deals", "Open", "Closed", "Forecasted rev", "Net rev", "Avg (forecast)", "% deals", "% rev"].map((h, i) => (
-              <th key={h} className="py-2 px-2" style={{ textAlign: i === 0 ? "left" : "right", borderBottom: `1px solid ${T.border}` }}>{h}</th>))}
+              <th key={h} className="py-2 px-2 px-2" style={{ textAlign: i === 0 ? "left" : "right", borderBottom: `1px solid ${T.border}` }}>{h}</th>))}
           </tr></thead>
           <tbody>
             {txByType.rows.map((x) => (
               <tr key={x.type} style={{ color: T.ink }}>
-                <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600 }}>{x.type}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{x.deals}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.open}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.closed}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.forecast, "currency")}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(x.net, "currency")}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.avg, "currency")}</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctDeals * 100).toFixed(0)}%</td>
-                <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctFc * 100).toFixed(0)}%</td>
+                <td className="py-2 px-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600 }}>{x.type}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{x.deals}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.open}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{x.closed}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.forecast, "currency")}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(x.net, "currency")}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{fmt(x.avg, "currency")}</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctDeals * 100).toFixed(0)}%</td>
+                <td className="py-2 px-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{(x.pctFc * 100).toFixed(0)}%</td>
               </tr>))}
             <tr style={{ color: T.ink, fontWeight: 700 }}>
-              <td className="py-2 px-2">Total</td>
-              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{txByType.totals.deals}</td>
-              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.open, 0)}</td>
-              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.closed, 0)}</td>
-              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.forecast, "currency")}</td>
-              <td className="py-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.net, "currency")}</td>
-              <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.avg, "currency")}</td>
-              <td className="py-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
-              <td className="py-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
+              <td className="py-2 px-2 px-2">Total</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{txByType.totals.deals}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.open, 0)}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txByType.rows.reduce((s, x) => s + x.closed, 0)}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.forecast, "currency")}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ color: T.sub, fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.net, "currency")}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(txByType.totals.avg, "currency")}</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
+              <td className="py-2 px-2 px-2 text-right" style={{ color: T.sub }}>100%</td>
             </tr>
           </tbody>
         </table></div>
@@ -1679,36 +1678,36 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     <Panel title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
       <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 520 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
-          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Team</th>
-          <th className="pb-2 font-medium text-right">Closed Revenue</th><th className="pb-2 font-medium text-right">Deals</th><th className="pb-2 font-medium text-right">Avg Deal</th></tr></thead>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium">Rep</th><th className="pb-2 px-2 whitespace-nowrap font-medium">Team</th>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Closed Revenue</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Deals</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Avg Deal</th></tr></thead>
         <tbody>{leaderboard.length ? leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
-          <td className="py-2 font-medium">{row.owner}</td><td className="py-2" style={{ color: T.sub }}>{row.team || "—"}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
+          <td className="py-2 px-2 font-medium">{row.owner}</td><td className="py-2 px-2" style={{ color: T.sub }}>{row.team || "—"}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink }}>{fmt(row.rev, "currency")}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.deals}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.avg, "currency")}</td></tr>))
           : (<tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No closed deals in this scope.</td></tr>)}</tbody>
       </table></div></Panel>
     <Panel title="Rep scorecard">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>Show Rate is role-aware — VPs &amp; closers (anyone who runs appointments) are scored on appointments attended ÷ appointments assigned to them; setters on appointments they set that were met ÷ appointments they set. The Attended column follows the same rule. Both AMs and VPs are listed.</div>
-      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 780 }}>
+      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 1080 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
-          <th className="pb-2 font-medium">Rep</th><th className="pb-2 font-medium">Role</th>
-          <th className="pb-2 font-medium text-right">Opps Created</th><th className="pb-2 font-medium text-right">Opps→ARIP</th><th className="pb-2 font-medium text-right">ARIP→Review</th><th className="pb-2 font-medium text-right">Opps Assigned</th><th className="pb-2 font-medium text-right">Opps Deaded</th><th className="pb-2 font-medium text-right">Talk Time</th>
-          <th className="pb-2 font-medium text-right">QCs</th><th className="pb-2 font-medium text-right">Appts Set</th>
-          <th className="pb-2 font-medium text-right">Attended</th><th className="pb-2 font-medium text-right">Show Rate</th></tr></thead>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium">Rep</th><th className="pb-2 px-2 whitespace-nowrap font-medium">Role</th>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Created</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps→ARIP</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">ARIP→Review</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Assigned</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Opps Deaded</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Talk Time</th>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">QCs</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Appts Set</th>
+          <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Attended</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Show Rate</th></tr></thead>
         <tbody>{scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
-          <td className="py-2 font-medium">{row.rep}</td>
-          <td className="py-2" style={{ color: T.sub }}>{row.role || "—"}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsArip.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.aripReview.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsAssigned.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsDeaded.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.shownAttended.toLocaleString()}</td>
-          <td className="py-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>))}</tbody>
+          <td className="py-2 px-2 font-medium">{row.rep}</td>
+          <td className="py-2 px-2" style={{ color: T.sub }}>{row.role || "—"}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsCreated.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsArip.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.aripReview.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsAssigned.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.oppsDeaded.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(row.minutes, "minutes")}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.qcs.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.apptsSet.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{row.shownAttended.toLocaleString()}</td>
+          <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>))}</tbody>
       </table></div></Panel>
     <Panel title="Appointment outcomes (all appointments in scope)">
       <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
@@ -1789,6 +1788,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-audit-pass</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · cleanup-pass</p>
   </>);
 }
