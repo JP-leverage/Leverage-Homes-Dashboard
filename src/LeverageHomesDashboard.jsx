@@ -1775,7 +1775,7 @@ export default function App() {
         <span className="px-2 py-0.5 rounded-full" style={{ background: st.mode === "google" ? T.accentSoft : T.track, color: st.mode === "google" ? T.good : T.sub }}>{st.mode === "google" ? "Live · Google Sheets" : "Sample data"}</span>
         <span className="hidden sm:inline">{iso(range.start)} → {iso(range.end)}</span>
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
-    <div className="p-3 sm:p-6 max-w-[1200px] mx-auto overflow-x-hidden">{body}</div></div>);
+    <div className="p-3 sm:p-6 max-w-[1200px] mx-auto" style={{ overflowX: "clip" }}>{body}</div></div>);
 
   if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
   if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
@@ -1789,6 +1789,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · mobile-no-overflow</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · sticky-filter-clip</p>
   </>);
 }
