@@ -262,7 +262,7 @@ const DATASETS = {
     workbook: "opportunities_pt2",
     require: [], exclude: [], tabInclude: /Closed Opps x YTD/i,
     schema: { id: "Opportunity ID", owner: "Opportunity Owner", name: "Opportunity Name",
-      revenue: ["Total Net Revenue", "Net Revenue", "Total Forecasted Revenue"], acqManager: "Acquisition Manager",
+      revenue: ["Total Forecasted Revenue", "Total Net Revenue", "Net Revenue"], acqManager: "Acquisition Manager",
       acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", listingPartner: "Listing Partner", closeDate: "Close Date", txType: "Transaction Type" },
     dedupe: (r) => (r.id != null && r.id !== "" ? String(r.id) : null), dateField: "closeDate",
     repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
@@ -980,9 +980,9 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
           style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>{DATE_PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
       {date.preset === "custom" && (<>
         <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>From</span>
-          <input type="date" value={date.start} onChange={(e) => setDate({ ...date, start: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} /></label>
+          <input type="date" value={date.start} onChange={(e) => setDate({ ...date, start: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card, colorScheme: T === THEMES.dark ? "dark" : "light" }} /></label>
         <label className="flex flex-col gap-1"><span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>To</span>
-          <input type="date" value={date.end} onChange={(e) => setDate({ ...date, end: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} /></label></>)}
+          <input type="date" value={date.end} onChange={(e) => setDate({ ...date, end: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card, colorScheme: T === THEMES.dark ? "dark" : "light" }} /></label></>)}
     </div></div>);
 }
 function Sparkline({ data, color }) {
@@ -1500,7 +1500,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
       if (!res || res.unattributable) { out[id] = null; return; }
-      if (kpi.breakoutBy) {
+      if (kpi.breakoutBy && org.rep !== "All") { // single-rep only (e.g. QC 3+/5+/10+ tiers). At team/All scope, fall through to the per-person breakout below.
         const custom = kpi.breakoutBy(res.rows).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
         if (custom.length) { out[id] = { items: custom, custom: true }; return; }
       }
@@ -1622,7 +1622,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   }, [store, org, range, dir]);
 
   const byMonth = useMemo(() => { const m = {};
-    applyFilters(store.opps_closed || [], DATASETS.opps_closed, org, null, dir)
+    applyFilters(store.closed_opps || [], DATASETS.closed_opps, org, null, dir)
       .forEach((o) => { const k = monthKey(o.closeDate); if (k) m[k] = (m[k] || 0) + num(o.revenue); });
     return Object.entries(m).sort().map(([k, v]) => ({ label: k, value: v })).slice(-12); }, [store, org, dir]);
   const byStage = useMemo(() => { const m = {};
@@ -1871,7 +1871,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </BarChart></ResponsiveContainer></div></Panel>
     </div>
     )}
-    <Panel collapsible title={`Closed revenue by month — ${drillLabel} (Total Net Revenue · all months)`}><div style={{ height: 200 }}><ResponsiveContainer>
+    <Panel collapsible title={`Closed revenue by month — ${drillLabel} (Total Forecasted Revenue · YTD)`}><div style={{ height: 200 }}><ResponsiveContainer>
       <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
@@ -1972,7 +1972,7 @@ export default function App() {
   T = THEMES[mode];
   const [density, setDensity] = useState("comfortable");
   D = DENSITIES[density] || DENSITIES.comfortable;
-  const [date, setDate] = useState({ preset: "this_year", start: "2026-01-01", end: iso(new Date()) });
+  const [date, setDate] = useState({ preset: "this_month", start: "2026-01-01", end: iso(new Date()) });
   const range = useMemo(() => resolveRange(date.preset, date, new Date()), [date]);
   const rangeFwd = useMemo(() => resolveRange(date.preset, date, new Date(), true), [date]); // pipeline forecast spans the full selected period (deals close in the future)
 
@@ -2012,6 +2012,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-07-22 · v2-features</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-03 · v2-features-r3</p>
   </>);
 }
