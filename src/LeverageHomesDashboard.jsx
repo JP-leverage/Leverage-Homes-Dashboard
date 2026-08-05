@@ -742,11 +742,11 @@ const TX_STAGE_DURATIONS = [
   { id: "mkt_buyerarip",    label: "Marketing → Buyer ARIP",      from: "marketingDate",     to: "buyerAripDate" },
   { id: "buyerarip_uc",     label: "Buyer ARIP → Under Contract", from: "buyerAripDate",     to: "underContractDate" },
 ];
-// One matrix cell: median days + deal count (renders "—" when empty). Uses module-level theme T.
+// One matrix cell: median days (headline) + average & deal count beneath (renders "—" when empty). Uses module-level theme T.
 function txDurCell(c) {
   if (!c || c.median == null) return <span style={{ color: T.faint }}>—</span>;
   return (<><span>{Math.round(c.median)}<span style={{ color: T.faint, fontWeight: 400 }}> d</span></span>
-    <div className="text-[9px] leading-none" style={{ color: T.faint }}>{c.n} {c.n === 1 ? "deal" : "deals"}</div></>);
+    <div className="text-[9px] leading-none" style={{ color: T.faint }}>avg {Math.round(c.avg)}d · {c.n}</div></>);
 }
 // Appointment outcome semantics (JP spec):
 //   attended  = "Appointment Met" ONLY. Anything containing "no show" / "missed" is a miss —
@@ -1487,6 +1487,7 @@ function ListingPartnerView({ store, dir, range, lp }) {
 function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
+  const [txStageMetric, setTxStageMetric] = useState("arip_close"); // which stage transition the per-rep table shows
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -1763,12 +1764,37 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const types = [...new Set(rows.map((r) => String(r.txType || "").trim()).filter(Boolean))]
       .sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b); });
     const cell = (subset, m) => { const vals = subset.map((r) => daysBetween(r[m.from], r[m.to])).filter((n) => n != null);
-      return { median: vals.length ? median(vals) : null, n: vals.length }; };
+      return { median: vals.length ? median(vals) : null, avg: vals.length ? mean(vals) : null, n: vals.length }; };
     const byType = {}; types.forEach((t) => { byType[t] = rows.filter((r) => String(r.txType || "").trim() === t); });
     const metrics = TX_STAGE_DURATIONS.map((m) => ({ ...m, all: cell(rows, m),
       cells: Object.fromEntries(types.map((t) => [t, cell(byType[t], m)])) })).filter((m) => m.all.n > 0);
     return { types, metrics, total: rows.length };
   }, [store, org, range, dir]);
+  // Same stage-transition durations, but broken out per rep × transaction type for every transition, so the
+  // Transactions view can show a cross-rep comparison for one transition at a time (picker-driven). A deal is
+  // credited to every rep who touched it (owner/VP, AM, AM2, follow-up) — matching the leaderboard/scorecard —
+  // so a rep's median is over the deals they were on. Reps restricted to the current directory scope.
+  const txStageByRep = useMemo(() => {
+    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
+    const ORDER = ["Assignment", "Novation", "Fix & Flip"];
+    const types = [...new Set(rows.map((r) => String(r.txType || "").trim()).filter(Boolean))]
+      .sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b); });
+    const RF = DATASETS.tx_duration.repFields; // owner/VP + AM + AM2 + follow-up
+    const scope = repsInScope(dir, org);
+    const inScopeRep = (r) => scope ? scope.has(r) : (!inDir || inDir.has(r));
+    const perRep = {}; // rep -> rows[] (multi-credit; dedupe roles within a deal)
+    rows.forEach((row) => { new Set(RF.map((f) => String(row[f] ?? "").trim()).filter(Boolean))
+      .forEach((rep) => { if (inScopeRep(rep)) (perRep[rep] = perRep[rep] || []).push(row); }); });
+    const cell = (subset, m) => { const vals = subset.map((r) => daysBetween(r[m.from], r[m.to])).filter((n) => n != null);
+      return { median: vals.length ? median(vals) : null, avg: vals.length ? mean(vals) : null, n: vals.length }; };
+    const byTransition = {};
+    TX_STAGE_DURATIONS.forEach((m) => {
+      byTransition[m.id] = Object.entries(perRep).map(([rep, rs]) => ({ rep, role: dir.byRep[rep]?.role,
+        all: cell(rs, m), cells: Object.fromEntries(types.map((t) => [t, cell(rs.filter((r) => String(r.txType || "").trim() === t), m)])) }))
+        .filter((x) => x.all.n > 0).sort((a, b) => (a.all.median ?? 1e9) - (b.all.median ?? 1e9) || b.all.n - a.all.n);
+    });
+    return { types, byTransition, total: rows.length };
+  }, [store, org, range, dir, inDir]);
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
   const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage) && inCloseFwd(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, rangeFwd, dir]);
@@ -1827,8 +1853,46 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
             </table>
           </div>
         ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with stage dates for this scope in the selected period.</div>}
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Median days between the two stage dates for deals that <b>closed in the selected period</b> (still-open deals excluded). Each metric is measured only over deals that have <b>both</b> stage dates populated, so the deal count varies by row. Scoped to <b>{drillLabel}</b>.</div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell shows the <b>median</b> days between the two stage dates, with the <b>average</b> and deal count beneath, for deals that <b>closed in the selected period</b> (still-open deals excluded). Each metric is measured only over deals that have <b>both</b> stage dates populated, so the deal count varies by row. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
+      {org.rep === "All" && (() => {
+        const opts = TX_STAGE_DURATIONS.filter((m) => (txStageByRep.byTransition[m.id] || []).length);
+        if (!opts.length) return null;
+        const sel = opts.some((m) => m.id === txStageMetric) ? txStageMetric : opts[0].id;
+        const reps = txStageByRep.byTransition[sel] || [];
+        const selLabel = (TX_STAGE_DURATIONS.find((m) => m.id === sel) || {}).label;
+        return (<Panel title={`Stage duration by rep & transaction type — ${drillLabel}`}>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Transition</span>
+            <select value={sel} onChange={(e) => setTxStageMetric(e.target.value)} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
+              style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+              {opts.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          </div>
+          {reps.length ? (
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Rep</th>
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Role</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>All</th>
+                  {txStageByRep.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
+                </tr></thead>
+                <tbody>{reps.map((r) => (
+                  <tr key={r.rep} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, whiteSpace: "nowrap" }}>{r.role || "—"}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.all)}</td>
+                    {txStageByRep.types.map((t) => (
+                      <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.cells[t])}</td>))}
+                  </tr>))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with these stage dates for this scope.</div>}
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>{selLabel}</b> — median days (average &amp; deal count beneath) per rep, sorted fastest first, for deals that <b>closed in the selected period</b>. A deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so a rep appears in every deal they were on. Pick another transition above. Scoped to <b>{drillLabel}</b>.</div>
+        </Panel>);
+      })()}
       <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -2074,6 +2138,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-04 · v2-features-r4 (tx stage durations)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-04 · v2-features-r5 (tx stage durations + per-rep)</p>
   </>);
 }
