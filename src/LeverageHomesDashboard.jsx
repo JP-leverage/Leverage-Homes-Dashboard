@@ -151,7 +151,9 @@ const DATASETS = {
     require: ["Duration ARIP to Closed", "Transaction Type", "Arip Date"], exclude: [], tabInclude: /Median Duration/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", txType: "Transaction Type", aripDate: "Arip Date",
       closeDate: "Close Date", duration: "Duration ARIP to Closed", owner: "Opportunity Owner",
-      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist" },
+      acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist",
+      dealReviewDate: "Date Moved to Deal Review", preMarketingDate: "Date Moved to Pre Marketing",
+      marketingDate: "Date Moved to Marketing", buyerAripDate: "Date Moved to Buyer ARIP", underContractDate: "Under Contract Date" },
     dedupe: (r) => r.id, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   contracts_sent: {
@@ -684,6 +686,8 @@ function parseDate(v) {
   const d = new Date(s); return isNaN(d) ? null : d;
 }
 const monthKey = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : null; };
+// Whole-day gap between two date columns (date-only). null if either side is blank or the gap is negative.
+const daysBetween = (from, to) => { const a = parseDate(from), b = parseDate(to); if (!a || !b) return null; const d = Math.round((b - a) / 86400000); return d >= 0 ? d : null; };
 
 function dedupeLatest(rows, keyField, dateField, prefer) {
   const best = {}, keep = [];
@@ -724,6 +728,26 @@ const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org,
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
 const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues", "Probate"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
+// Stage-transition durations for the Transactions view. Each = day-gap between two date columns on the
+// Median Duration tabs (Transactions workbook), computed in-app from the raw stage dates — not the sheet's
+// precomputed "Duration ARIP to Closed" — so every transition uses one consistent method. Add a row here to
+// track a new transition; no other change is needed (schema fields already carry the dates).
+const TX_STAGE_DURATIONS = [
+  { id: "arip_close",       label: "ARIP → Close",                from: "aripDate",          to: "closeDate" },
+  { id: "dealreview_close", label: "Deal Review → Close",         from: "dealReviewDate",    to: "closeDate" },
+  { id: "premkt_close",     label: "Pre-Marketing → Close",       from: "preMarketingDate",  to: "closeDate" },
+  { id: "mkt_close",        label: "Marketing → Close",           from: "marketingDate",     to: "closeDate" },
+  { id: "buyerarip_close",  label: "Buyer ARIP → Close",          from: "buyerAripDate",     to: "closeDate" },
+  { id: "uc_close",         label: "Under Contract → Close",      from: "underContractDate", to: "closeDate" },
+  { id: "mkt_buyerarip",    label: "Marketing → Buyer ARIP",      from: "marketingDate",     to: "buyerAripDate" },
+  { id: "buyerarip_uc",     label: "Buyer ARIP → Under Contract", from: "buyerAripDate",     to: "underContractDate" },
+];
+// One matrix cell: median days + deal count (renders "—" when empty). Uses module-level theme T.
+function txDurCell(c) {
+  if (!c || c.median == null) return <span style={{ color: T.faint }}>—</span>;
+  return (<><span>{Math.round(c.median)}<span style={{ color: T.faint, fontWeight: 400 }}> d</span></span>
+    <div className="text-[9px] leading-none" style={{ color: T.faint }}>{c.n} {c.n === 1 ? "deal" : "deals"}</div></>);
+}
 // Appointment outcome semantics (JP spec):
 //   attended  = "Appointment Met" ONLY. Anything containing "no show" / "missed" is a miss —
 //               including "Attended, No Show", which counts toward the total but not as attended.
@@ -1729,6 +1753,22 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     return Object.entries(m).map(([label, arr]) => ({ label, value: median(arr), closed: arr.filter((n) => n > 0).length, total: arr.length }))
       .filter((x) => x.total > 0).sort((a, b) => a.value - b.value);
   }, [store, org, range, dir]);
+  // Median duration for every TX_STAGE_DURATIONS transition × transaction type, over deals that CLOSED in
+  // the selected period. Each cell is computed only over rows where both endpoint dates are present, so a
+  // deal contributes to one transition and not another depending on which stage dates it has. Transitions
+  // with no data anywhere in scope are dropped so the table stays tight.
+  const txStageMatrix = useMemo(() => {
+    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
+    const ORDER = ["Assignment", "Novation", "Fix & Flip"];
+    const types = [...new Set(rows.map((r) => String(r.txType || "").trim()).filter(Boolean))]
+      .sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b); });
+    const cell = (subset, m) => { const vals = subset.map((r) => daysBetween(r[m.from], r[m.to])).filter((n) => n != null);
+      return { median: vals.length ? median(vals) : null, n: vals.length }; };
+    const byType = {}; types.forEach((t) => { byType[t] = rows.filter((r) => String(r.txType || "").trim() === t); });
+    const metrics = TX_STAGE_DURATIONS.map((m) => ({ ...m, all: cell(rows, m),
+      cells: Object.fromEntries(types.map((t) => [t, cell(byType[t], m)])) })).filter((m) => m.all.n > 0);
+    return { types, metrics, total: rows.length };
+  }, [store, org, range, dir]);
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
   const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage) && inCloseFwd(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, rangeFwd, dir]);
@@ -1766,6 +1806,28 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
             </div>); })}
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
         <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
+      </Panel>
+      <Panel title={`Median stage durations by transaction type — ${drillLabel}`}>
+        {txStageMatrix.metrics.length ? (
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
+              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage transition</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>All</th>
+                {txStageMatrix.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
+              </tr></thead>
+              <tbody>{txStageMatrix.metrics.map((m) => (
+                <tr key={m.id} style={{ color: T.ink }}>
+                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.all)}</td>
+                  {txStageMatrix.types.map((t) => (
+                    <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.cells[t])}</td>))}
+                </tr>))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with stage dates for this scope in the selected period.</div>}
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Median days between the two stage dates for deals that <b>closed in the selected period</b> (still-open deals excluded). Each metric is measured only over deals that have <b>both</b> stage dates populated, so the deal count varies by row. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
       <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
@@ -2012,6 +2074,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-03 · v2-features-r3</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-04 · v2-features-r4 (tx stage durations)</p>
   </>);
 }
