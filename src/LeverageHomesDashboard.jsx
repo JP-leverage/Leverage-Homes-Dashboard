@@ -157,15 +157,16 @@ const DATASETS = {
     dedupe: (r) => r.id, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   stage_history: {
-    // Transactions workbook — "All Opportunity Stage History x YTD" tab. Full StageName transition log:
-    // one row per stage change (Old Value → New Value, Edit Date), plus a "Stage" column that is the opp's
-    // CURRENT stage repeated on every row, and the rep fields. Powers the stage-conversion/probability engine.
+    // StageName field-history. To keep Coefficient refresh fast, this can be split into two single-filter
+    // reports — "…Stage History Entries…" (New Value = a core stage) and "…Stage History Exits…" (Old Value =
+    // a core stage). The loader unions any tab whose name contains "Stage History" and dedupes the core→core
+    // rows that appear in both. A single full "All Opportunity Stage History" tab also still works unchanged.
     workbook: "transactions",
-    require: ["Opportunity ID", "New Value", "Stage", "Edit Date"], exclude: [], tabInclude: /All Opportunity Stage History/i,
+    require: ["Opportunity ID", "New Value", "Stage", "Edit Date"], exclude: [], tabInclude: /Stage History/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", recordType: "Opportunity Record Type", txType: "Transaction Type",
       oldValue: "Old Value", newValue: "New Value", stage: "Stage",
       owner: "Opportunity Owner", acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist" },
-    dedupe: null, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+    dedupe: (r) => [r.id, r.oldValue, r.newValue, r.date].join("|"), dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   contracts_sent: {
     // Tasks workbook — "Contracts Sent x YTD - VPs" tab. Standard Salesforce Activity export
@@ -1994,7 +1995,9 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const isVP = (n) => /president|vp\b/i.test(dir?.byRep?.[n]?.role || "");
     const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
     const name2owner = {};
-    (store.stage_history || []).forEach((r) => { const nm = String(r.name ?? "").trim(), ow = String(r.owner ?? "").trim(); if (nm && ow && !(nm in name2owner)) name2owner[nm] = ow; });
+    [store.opps_created, store.pipeline, store.closed_opps, store.arip_entered, store.stage_history].forEach((dsRows) => {
+      (dsRows || []).forEach((r) => { const nm = String(r.name ?? "").trim(), ow = String(r.owner ?? "").trim(); if (nm && ow && !(nm in name2owner)) name2owner[nm] = ow; });
+    });
     const oppsAssigned = {}, seen = {};
     (store.opps_assigned || []).forEach((r) => { const ow = String(r.owner ?? "").trim(); if (!isVP(ow) || !inR(r.date)) return;
       const k = ow + "|" + r.id; if (r.id && seen[k]) return; if (r.id) seen[k] = 1; oppsAssigned[ow] = (oppsAssigned[ow] || 0) + 1; });
@@ -2559,6 +2562,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r20 (unified closed definition across engine · consistent w/ Closed report)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r22 (stage-history reads split entry/exit reports + dedupe · trim-ready)</p>
   </>);
 }
