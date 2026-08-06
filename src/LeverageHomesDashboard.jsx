@@ -2126,6 +2126,15 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
     {isTxView ? (<>
+      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
+        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
+          <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
+          <YAxis type="category" dataKey="label" tick={{ fontSize: 12, fill: T.sub }} axisLine={false} tickLine={false} width={168} interval={0} />
+          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={T.accent} maxBarSize={22}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 11, fill: T.sub }} /></Bar>
+        </BarChart></ResponsiveContainer></div>
+        <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div></>) : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No open pipeline for this scope in the selected period.</div>}
+      </Panel>
       <Panel title={`Time between stages — ${drillLabel}`}>
         <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
           {[["aripclose", "ARIP → Close"], ["bystage", "By stage"], ["byrep", "By rep"]].map(([v, l]) => (
@@ -2303,15 +2312,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No stage movement in the selected period for this scope.</div>}
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>This is <b>movement during the selected period</b>, not outcomes — so it reads cleanly on any window, even This Month. <b>Entered</b> = deals that moved into the stage; <b>Left</b> = deals that moved out. Of those that left: <b>Advanced</b> = moved forward or closed; <b>Reverted</b> = slipped back to an earlier stage; <b>Dead</b> = died. The stage with the highest Reverted/Dead is where deals are leaking <b>right now</b>. Counts stage transitions dated in the window. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>); })()}
-      <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
-        <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
-          <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
-          <YAxis type="category" dataKey="label" tick={{ fontSize: 12, fill: T.sub }} axisLine={false} tickLine={false} width={168} interval={0} />
-          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={T.accent} maxBarSize={22}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 11, fill: T.sub }} /></Bar>
-        </BarChart></ResponsiveContainer></div>
-        <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div></>) : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No open pipeline for this scope in the selected period.</div>}
-      </Panel>
       <Panel title={`Transaction summary — ${drillLabel}`}>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 760 }}>
           <thead><tr style={{ color: T.faint, textAlign: "right" }}>
@@ -2555,6 +2555,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r16 (merged Sales Appointments panel · 4 tabs)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r17 (Pipeline-by-stage moved to top of Transactions)</p>
   </>);
 }
