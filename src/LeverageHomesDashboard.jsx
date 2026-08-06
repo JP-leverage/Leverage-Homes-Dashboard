@@ -1514,7 +1514,7 @@ function ApptOutcomeBreakout({ groups }) {
     </div>
   </div>);
 }
-function ApptRoleSection({ store, dir, org, range }) {
+function ApptRoleSection({ store, dir, org, range, part = "both" }) {
   const { S, A, L, rows } = useMemo(() => apptStats(store, dir, range), [store, dir, range]);
   const inDir = useMemo(() => directorySet(dir), [dir]);
   const isVPrep = (rep) => /vice\s*president|\bvp\b/i.test(String(dir.byRep[String(rep).trim()]?.role || ""));
@@ -1582,8 +1582,8 @@ function ApptRoleSection({ store, dir, org, range }) {
     if (lp.length) cards.push(groupCard(lp, "rate", "Listing Partners", "LP", "sr-lp"), groupCard(lp, "count", "Listing Partners", "LP", "aa-lp"));
   }
   return (<div className="flex flex-col gap-4">
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>
-    <ApptOutcomeBreakout groups={outcomes} />
+    {part !== "breakout" && <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(248px, 1fr))" }}>{cards}</div>}
+    {part !== "rate" && <ApptOutcomeBreakout groups={outcomes} />}
   </div>);
 }
 
@@ -1641,6 +1641,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const [txStageMetric, setTxStageMetric] = useState("arip_close"); // which stage transition the per-rep table shows
   const [txExclFlips, setTxExclFlips] = useState(false); // Transactions stage panels: pull out front/back-end + Fix & Flip
   const [stageLens, setStageLens] = useState("close"); // merged stage panel: "close" (resolved rate) | "advance"
+  const [txTimeTab, setTxTimeTab] = useState("aripclose"); // merged timing panel: "aripclose" | "bystage" | "byrep"
+  const [apptTab, setApptTab] = useState("showrate"); // merged Sales appointments panel: showrate | funnel | outcomes | breakout
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -2124,77 +2126,85 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
     {isTxView ? (<>
-      <Panel title={`Median days · ARIP → Close by transaction type — ${drillLabel}`}>
-        {txMedians.length ? (<div className="flex flex-col gap-3 pt-1">
-          {txMedians.map((x) => { const mx = Math.max(...txMedians.map((t) => t.value)) || 1; return (
-            <div key={x.label} className="flex items-center gap-3">
-              <div className="text-[15px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{x.label} <span style={{ color: T.faint }}>({x.closed} closed)</span></div>
-              <div className="hidden sm:block flex-1 h-4 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 280 }}><div style={{ width: `${Math.round((x.value / mx) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
-              <div className="text-[22px] sm:text-[26px] font-bold text-right shrink-0" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{Math.round(x.value)} <span className="text-[12px] font-normal" style={{ color: T.faint }}>days</span></div>
-            </div>); })}
-        </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
-        <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
-      </Panel>
-      <Panel title={`Time between stages by transaction type — ${drillLabel}`}>
-        {txStageMatrix.metrics.length ? (
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
-              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
-                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage transition</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>All</th>
-                {txStageMatrix.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
-              </tr></thead>
-              <tbody>{txStageMatrix.metrics.map((m) => (
-                <tr key={m.id} style={{ color: T.ink }}>
-                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.all)}</td>
-                  {txStageMatrix.types.map((t) => (
-                    <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.cells[t])}</td>))}
-                </tr>))}
-              </tbody>
-            </table>
-          </div>
-        ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with stage dates for this scope in the selected period.</div>}
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell shows the <b>median</b> days between the two stage dates, with the <b>average</b> and deal count beneath, for deals that <b>closed in the selected period</b> (still-open deals excluded). Each metric is measured only over deals that have <b>both</b> stage dates populated, so the deal count varies by row. Scoped to <b>{drillLabel}</b>.</div>
-      </Panel>
-      {org.rep === "All" && (() => {
-        const opts = TX_STAGE_DURATIONS.filter((m) => (txStageByRep.byTransition[m.id] || []).length);
-        if (!opts.length) return null;
-        const sel = opts.some((m) => m.id === txStageMetric) ? txStageMetric : opts[0].id;
-        const reps = txStageByRep.byTransition[sel] || [];
-        const selLabel = (TX_STAGE_DURATIONS.find((m) => m.id === sel) || {}).label;
-        return (<Panel title={`Time between stages by rep — ${drillLabel}`}>
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Transition</span>
-            <select value={sel} onChange={(e) => setTxStageMetric(e.target.value)} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
-              style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
-              {opts.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-          </div>
-          {reps.length ? (
+      <Panel title={`Time between stages — ${drillLabel}`}>
+        <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
+          {[["aripclose", "ARIP → Close"], ["bystage", "By stage"], ["byrep", "By rep"]].map(([v, l]) => (
+            <button key={v} onClick={() => setTxTimeTab(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+              style={{ background: txTimeTab === v ? T.card : "transparent", color: txTimeTab === v ? T.ink : T.sub, boxShadow: txTimeTab === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+        </div>
+        {txTimeTab === "aripclose" ? (<>
+          {txMedians.length ? (<div className="flex flex-col gap-3 pt-1">
+            {txMedians.map((x) => { const mx = Math.max(...txMedians.map((t) => t.value)) || 1; return (
+              <div key={x.label} className="flex items-center gap-3">
+                <div className="text-[15px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{x.label} <span style={{ color: T.faint }}>({x.closed} closed)</span></div>
+                <div className="hidden sm:block flex-1 h-4 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 280 }}><div style={{ width: `${Math.round((x.value / mx) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
+                <div className="text-[22px] sm:text-[26px] font-bold text-right shrink-0" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{Math.round(x.value)} <span className="text-[12px] font-normal" style={{ color: T.faint }}>days</span></div>
+              </div>); })}
+          </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
+          <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
+        </>) : txTimeTab === "bystage" ? (<>
+          {txStageMatrix.metrics.length ? (
             <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
               <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
                 <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
-                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Rep</th>
-                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Role</th>
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage transition</th>
                   <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>All</th>
-                  {txStageByRep.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
+                  {txStageMatrix.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
                 </tr></thead>
-                <tbody>{reps.map((r) => (
-                  <tr key={r.rep} style={{ color: T.ink }}>
-                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
-                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, whiteSpace: "nowrap" }}>{r.role || "—"}</td>
-                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.all)}</td>
-                    {txStageByRep.types.map((t) => (
-                      <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.cells[t])}</td>))}
+                <tbody>{txStageMatrix.metrics.map((m) => (
+                  <tr key={m.id} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.all)}</td>
+                    {txStageMatrix.types.map((t) => (
+                      <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(m.cells[t])}</td>))}
                   </tr>))}
                 </tbody>
               </table>
             </div>
-          ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with these stage dates for this scope.</div>}
-          <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>{selLabel}</b> — median days (average &amp; deal count beneath) per rep, sorted fastest first, for deals that <b>closed in the selected period</b>. A deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so a rep appears in every deal they were on. Pick another transition above. Scoped to <b>{drillLabel}</b>.</div>
-        </Panel>);
-      })()}
+          ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with stage dates for this scope in the selected period.</div>}
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell shows the <b>median</b> days between the two stage dates, with the <b>average</b> and deal count beneath, for deals that <b>closed in the selected period</b> (still-open deals excluded). Each metric is measured only over deals that have <b>both</b> stage dates populated, so the deal count varies by row. Scoped to <b>{drillLabel}</b>.</div>
+        </>) : (<>
+          {org.rep !== "All" ? (<div className="text-[13px] py-6 text-center" style={{ color: T.sub }}>Clear the Rep filter to <b>All reps</b> to compare time between stages per rep.</div>
+          ) : (() => {
+            const opts = TX_STAGE_DURATIONS.filter((m) => (txStageByRep.byTransition[m.id] || []).length);
+            if (!opts.length) return <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with stage dates for this scope.</div>;
+            const sel = opts.some((m) => m.id === txStageMetric) ? txStageMetric : opts[0].id;
+            const reps = txStageByRep.byTransition[sel] || [];
+            const selLabel = (TX_STAGE_DURATIONS.find((m) => m.id === sel) || {}).label;
+            return (<>
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Transition</span>
+                <select value={sel} onChange={(e) => setTxStageMetric(e.target.value)} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
+                  style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+                  {opts.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </div>
+              {reps.length ? (
+                <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
+                    <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                      <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Rep</th>
+                      <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Role</th>
+                      <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>All</th>
+                      {txStageByRep.types.map((t) => <th key={t} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{t}</th>)}
+                    </tr></thead>
+                    <tbody>{reps.map((r) => (
+                      <tr key={r.rep} style={{ color: T.ink }}>
+                        <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
+                        <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, whiteSpace: "nowrap" }}>{r.role || "—"}</td>
+                        <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.all)}</td>
+                        {txStageByRep.types.map((t) => (
+                          <td key={t} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{txDurCell(r.cells[t])}</td>))}
+                      </tr>))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with these stage dates for this scope.</div>}
+              <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>{selLabel}</b> — median days (average &amp; deal count beneath) per rep, sorted fastest first, for deals that <b>closed in the selected period</b>. A deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so a rep appears in every deal they were on. Pick another transition above. Scoped to <b>{drillLabel}</b>.</div>
+            </>);
+          })()}
+        </>)}
+      </Panel>
       <Panel title="Stage conversion & probability — how to read this">
         <ul className="flex flex-col gap-2 text-[12.5px] leading-snug" style={{ color: T.sub }}>
           <li><b style={{ color: T.ink }}>Resolved close rate</b> answers: of the deals that reached a stage, what share ended up closing? It counts only deals that have <i>finished playing out</i> — they either closed (a <b style={{ color: T.ink }}>Won</b>) or died / slid back to an earlier stage (a <b style={{ color: T.ink }}>Miss</b>). Deals still moving forward are set aside as <b style={{ color: T.ink }}>In-flight</b> and don't count yet. So "ARIP → Close 30%" means: of the ARIP deals that have resolved, 30% closed.</li>
@@ -2373,9 +2383,34 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
-    <Panel collapsible title="Appointments — Show Rate & Attended (role-aware)">
-      <div className="text-[11px] mb-3" style={{ color: T.faint }}>Setters (AMs) are scored on the appointments they <b>set</b> that were met, broken out per closer; VPs on appointments <b>assigned</b> to them, broken out per setter. On the All view both groups are shown side by side.</div>
-      <ApptRoleSection store={store} dir={dir} org={org} range={range} />
+    <Panel collapsible title="Appointments">
+      <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
+        {[["showrate", "Show Rate"], ["funnel", "Appt → ARIP"], ["outcomes", "Outcomes"], ["breakout", "Breakout"]].map(([v, l]) => (
+          <button key={v} onClick={() => setApptTab(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+            style={{ background: apptTab === v ? T.card : "transparent", color: apptTab === v ? T.ink : T.sub, boxShadow: apptTab === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+      </div>
+      {apptTab === "showrate" ? (<>
+        <div className="text-[11px] mb-3" style={{ color: T.faint }}>Setters (AMs) are scored on the appointments they <b>set</b> that were met, broken out per closer; VPs on appointments <b>assigned</b> to them, broken out per setter. On the All view both groups are shown side by side.</div>
+        <ApptRoleSection store={store} dir={dir} org={org} range={range} part="rate" />
+      </>) : apptTab === "funnel" ? (<>
+        <Bars items={apptFunnel.items} tint={T.chart[2]} />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
+          {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
+            <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
+              <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
+        </div>
+        <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
+      </>) : apptTab === "outcomes" ? (<>
+        <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
+        <div className="flex flex-col gap-2">{outcomeMix.items.map((o) => (
+          <div key={o.label} className="flex items-center gap-3">
+            <div className="text-[12px] shrink-0" style={{ width: 150, color: T.sub }}>{o.label}</div>
+            <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: /met/i.test(o.label) ? T.good : /no show|missed/i.test(o.label) ? T.bad : T.chart[3] }} /></div>
+            <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
+          </div>))}</div>
+      </>) : (
+        <ApptRoleSection store={store} dir={dir} org={org} range={range} part="breakout" />
+      )}
     </Panel>
     {(
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -2405,15 +2440,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
       </BarChart></ResponsiveContainer></div></Panel>
-    <Panel collapsible title={`Appt Set → ARIP — ${drillLabel} (appointment funnel)`}>
-      <Bars items={apptFunnel.items} tint={T.chart[2]} />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
-        {[["Appts set", apptFunnel.appts.toLocaleString()], ["Unique opps", apptFunnel.uniqueOpps.toLocaleString()], ["ARIPs (in period)", apptFunnel.arips.toLocaleString()], ["Appt → ARIP", (apptFunnel.conv * 100).toFixed(1) + "%"]].map(([l, v]) => (
-          <div key={l}><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
-            <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div></div>))}
-      </div>
-      <div className="text-[11px] mt-2" style={{ color: T.faint }}>Scoped to <b>{drillLabel}</b>. {apptFunnel.dated ? <>Appts respect the period by <b>appointment Created Date</b>; ARIPs by <b>Arip Date</b>.</> : "Appointments carry no date in the export, so appt counts are all-time; ARIPs respect the selected period."}</div>
-    </Panel>
     <Panel collapsible title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
       <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 520 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
@@ -2449,15 +2475,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.shownAttended, M.shownAttended) }}>{row.shownAttended.toLocaleString()}</td>
           <td className={R} style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink, ...(row.rate == null ? {} : heatBg(row.rate, M.rate)) }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>)); })()}</tbody>
       </table></div></Panel>
-    <Panel collapsible title="Appointment outcomes (all appointments in scope)">
-      <div className="text-[11px] mb-3" style={{ color: T.faint }}>{outcomeMix.total.toLocaleString()} appointments · Created Date in the selected period</div>
-      <div className="flex flex-col gap-2">{outcomeMix.items.map((o) => (
-        <div key={o.label} className="flex items-center gap-3">
-          <div className="text-[12px] shrink-0" style={{ width: 150, color: T.sub }}>{o.label}</div>
-          <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: /met/i.test(o.label) ? T.good : /no show|missed/i.test(o.label) ? T.bad : T.chart[3] }} /></div>
-          <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
-        </div>))}</div>
-    </Panel>
     </>)}
   </div>);
 }
@@ -2538,6 +2555,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r14 (toggle → front-end only)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r16 (merged Sales Appointments panel · 4 tabs)</p>
   </>);
 }
