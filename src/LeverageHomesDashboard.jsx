@@ -800,6 +800,9 @@ const STAGE_CONV_FROM = [
 const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed"];
 const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketing": "Pre-Marketing",
   "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract", "Closed": "Closed" };
+// Front-/back-end purchases and Fix & Flip transactions legitimately skip Buyer ARIP. The Transactions
+// stage panels expose a toggle to pull these out entirely; this is the membership test for that toggle.
+const isExcludedRecord = (r) => /front.?end|back.?end/i.test(String(r.recordType ?? "")) || /fix\s*&?\s*flip/i.test(String(r.txType ?? ""));
 // Roll transition-level rows up to one record per opp: current stage + first in-window entry date per stage,
 // plus owner/VP & AM (constant per opp). Rows arrive already org/rep/dir-gated (range=null); we date-anchor here.
 function stageOppAgg(rows) {
@@ -814,6 +817,17 @@ function stageOppAgg(rows) {
     const nv = String(r.newValue ?? "").trim();
     if (nv) { const t = parseDate(r.date); if (o.entered[nv] === undefined || (t && o.entered[nv] && o.entered[nv] > t)) o.entered[nv] = t || o.entered[nv] || null; }
   }
+  // Skip assumption: a deal that reached Under Contract (or closed Won) but never logged Buyer ARIP is
+  // assumed to have passed through it — credit a Buyer ARIP entry (dated by the UC entry, or the won entry as
+  // fallback) so flips that skip the stage aren't counted as a Marketing→Buyer ARIP leak or missing cohort.
+  m.forEach((o) => {
+    if ("Buyer ARIP" in o.entered) return;
+    let d = o.entered["Under Contract"];
+    if (d === undefined && WON_STAGES.has(o.cur)) {
+      for (const s of WON_STAGES) { const t = o.entered[s]; if (t && (d === undefined || (d && t < d))) d = t; }
+    }
+    if (d !== undefined) o.entered["Buyer ARIP"] = d || null;
+  });
   return m;
 }
 const enteredInRange = (o, stage, range) => {
@@ -1625,6 +1639,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
   const [txStageMetric, setTxStageMetric] = useState("arip_close"); // which stage transition the per-rep table shows
+  const [txExclFlips, setTxExclFlips] = useState(false); // Transactions stage panels: pull out front/back-end + Fix & Flip
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -1936,16 +1951,18 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   // per-VP close-rate matrix. All anchored on first entry into a stage within the selected period; org/rep/dir
   // scoping is applied at load (range=null) and the period window is applied on the entry date inside the engine.
   const stageConv = useMemo(() => {
-    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const all = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
     const agg = stageOppAgg(rows);
     return { A: stageReportA(agg, range), B: stageReportB(agg, range), byVP: stageReportByVP(agg, range, dir), opps: agg.size };
-  }, [store, org, range, dir]);
+  }, [store, org, range, dir, txExclFlips]);
   // Period movement (stage flow) — entries/exits and advance/revert/dead by core stage, keyed on transition
   // date so it reads cleanly on any window (even This Month), unlike the maturity-bound cohort close rates.
   const stageFlowData = useMemo(() => {
-    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const all = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
     return stageFlow(rows, range);
-  }, [store, org, range, dir]);
+  }, [store, org, range, dir, txExclFlips]);
   // Revenue attributed to each VP, two ways: per assigned opp and per appointment. All from already-loaded
   // datasets. Opps assigned + closed revenue carry Opportunity Owner (the VP) directly; appointments are
   // attributed to a VP by joining the appt's Opportunity Name to that opp's owner (name→owner map built from
@@ -2101,7 +2118,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed deals with an ARIP→Close duration for this scope yet.</div>}
         <div className="text-[11px] mt-4" style={{ color: T.faint }}>Median of "Duration ARIP to Closed" (days) across deals that <b>closed in the selected period</b>; still-open deals excluded. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
-      <Panel title={`Median stage durations by transaction type — ${drillLabel}`}>
+      <Panel title={`Time between stages by transaction type — ${drillLabel}`}>
         {txStageMatrix.metrics.length ? (
           <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
             <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
@@ -2129,7 +2146,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         const sel = opts.some((m) => m.id === txStageMetric) ? txStageMetric : opts[0].id;
         const reps = txStageByRep.byTransition[sel] || [];
         const selLabel = (TX_STAGE_DURATIONS.find((m) => m.id === sel) || {}).label;
-        return (<Panel title={`Stage duration by rep & transaction type — ${drillLabel}`}>
+        return (<Panel title={`Time between stages by rep — ${drillLabel}`}>
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Transition</span>
             <select value={sel} onChange={(e) => setTxStageMetric(e.target.value)} className="text-sm rounded-md px-2.5 py-1.5 outline-none"
@@ -2169,6 +2186,16 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <li>Every number is based on deals that <b style={{ color: T.ink }}>first entered a stage inside the date range selected up top</b>. A narrow range (like This Month) shows fewer deals — widen it for a fuller picture.</li>
         </ul>
       </Panel>
+      <div className="flex items-center gap-3 flex-wrap px-1 -mt-1">
+        <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Record types</span>
+        <div className="flex rounded-lg p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+          {[["all", "All record types"], ["excl", "Exclude flips / front & back-end"]].map(([v, l]) => {
+            const active = (v === "excl") === txExclFlips;
+            return (<button key={v} onClick={() => setTxExclFlips(v === "excl")} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+              style={{ background: active ? T.card : "transparent", color: active ? T.ink : T.sub, boxShadow: active ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>); })}
+        </div>
+        <span className="text-[11px]" style={{ color: T.faint }}>Deals that skip to Under Contract are assumed to have passed through Buyer ARIP.</span>
+      </div>
       <Panel title={`Stage conversion · resolved close rate — ${drillLabel}`}>
         {stageConv.A.length ? (
           <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
@@ -2488,6 +2515,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r11 (UC→Close step + stage-flow pulse)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r12 (Buyer ARIP skip assumption + flip toggle + rename)</p>
   </>);
 }
