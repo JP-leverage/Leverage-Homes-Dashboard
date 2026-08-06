@@ -1939,6 +1939,36 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       revPerAppt: apptN[vp] ? (rev[vp] || 0) / apptN[vp] : null, revPerAssigned: oppsAssigned[vp] ? (rev[vp] || 0) / oppsAssigned[vp] : null }))
       .sort((a, b) => b.rev - a.rev);
   }, [store, range, dir]);
+  // Per-rep funnel conversion: Attended→ARIP and ARIP→Closed. Role-specific credit (JP spec):
+  //   • Attended appt — VP credited for appts they ATTENDED (Assigned); AM/FU credited for appts they SET
+  //     (Created By). One appt can credit both (AM set it, VP attended it) — different skills, not double count.
+  //   • ARIPs & Closed — credited by the rep's own role field (VP=owner, AM=acq mgr/2, FU=follow-up).
+  // Each count gated on its own event date within the range. Read on This Quarter / This Year (This Month is thin).
+  const repConversion = useMemo(() => {
+    const roleOf = (rep) => { const r = String(dir.byRep?.[rep]?.role || "");
+      if (/vice\s*president|\bvp\b/i.test(r)) return "VP";
+      if (/acqu/i.test(r)) return "AM";
+      if (/follow.?up/i.test(r)) return "FU"; return null; };
+    const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+    const OPP_FIELDS = [["owner", "VP"], ["acqManager", "AM"], ["acqManager2", "AM"], ["followUp", "FU"]];
+    const aripSets = {};
+    (store.stage_history || []).forEach((r) => { if (String(r.newValue ?? "").trim() !== "Arip" || !inR(r.date) || !r.id) return;
+      OPP_FIELDS.forEach(([f, want]) => { const nm = String(r[f] ?? "").trim(); if (nm && roleOf(nm) === want) (aripSets[nm] = aripSets[nm] || new Set()).add(r.id); }); });
+    const closedN = {};
+    (store.closed_opps || []).forEach((r) => { if (!inR(r.closeDate)) return;
+      OPP_FIELDS.forEach(([f, want]) => { const nm = String(r[f] ?? "").trim(); if (nm && roleOf(nm) === want) closedN[nm] = (closedN[nm] || 0) + 1; }); });
+    const attN = {};
+    (store.appointments_attended || []).forEach((r) => { if (r.lpAssigned || !apptAttended(r.outcome) || !inR(r.date)) return;
+      const asg = String(r.rep ?? "").trim(), cb = String(r.createdBy ?? "").trim();
+      if (roleOf(asg) === "VP") attN[asg] = (attN[asg] || 0) + 1;
+      if (["AM", "FU"].includes(roleOf(cb))) attN[cb] = (attN[cb] || 0) + 1; });
+    const roster = (dir.people || []).map((p) => p.rep).filter((rep) => roleOf(rep) && (!inDir || inDir.has(rep)));
+    const ord = { VP: 0, AM: 1, FU: 2 };
+    return roster.map((rep) => { const role = roleOf(rep), A = attN[rep] || 0, R = aripSets[rep] ? aripSets[rep].size : 0, C = closedN[rep] || 0;
+      return { rep, role, attended: A, arips: R, closed: C, attToArip: A ? R / A : null, aripToClosed: R ? C / R : null }; })
+      .filter((x) => x.attended > 0 || x.arips > 0 || x.closed > 0)
+      .sort((a, b) => (ord[a.role] - ord[b.role]) || (b.closed - a.closed) || (b.arips - a.arips));
+  }, [store, range, dir, inDir]);
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
   const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage) && inCloseFwd(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, rangeFwd, dir]);
@@ -1993,6 +2023,38 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
             </table>
           </div>
           <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>Revenue</b> is closed (realized) Total Forecasted Revenue on each VP's won deals in the period. <b>Rev / Appt</b> = that revenue ÷ the appointments on the VP's deals (each appointment tied to a VP by the deal it's on). <b>Rev / Assigned Opp</b> = that revenue ÷ opps assigned under the VP. Together they show how efficiently a VP turns assignments and appointments into closed revenue. Opps assigned &amp; appointments date on their own created dates; revenue on close date. Scoped to <b>{drillLabel}</b>.</div>
+          </Panel>);
+      })()}
+      {org.rep === "All" && repConversion.length > 0 && (() => {
+        const maxAA = Math.max(0.0001, ...repConversion.map((r) => r.attToArip || 0));
+        const maxAC = Math.max(0.0001, ...repConversion.map((r) => r.aripToClosed || 0));
+        return (
+          <Panel title={`Conversion by rep — ${drillLabel}`}>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 620 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Rep</th>
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Role</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Attended</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>ARIPs</th>
+                  <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Attended → ARIP</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Deals Closed</th>
+                  <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>ARIP → Closed</th>
+                </tr></thead>
+                <tbody>{repConversion.map((r) => (
+                  <tr key={r.rep} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub }}>{r.role}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{r.attended.toLocaleString()}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{r.arips}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(r.attToArip, maxAA, false) || {}) }}>{r.attToArip == null ? <span style={{ color: T.faint }}>—</span> : Math.round(r.attToArip * 100) + "%"}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{r.closed}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(r.aripToClosed, maxAC, false) || {}) }}>{r.aripToClosed == null ? <span style={{ color: T.faint }}>—</span> : Math.round(r.aripToClosed * 100) + "%"}</td>
+                  </tr>))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Two funnel conversions per rep. <b>Attended → ARIP</b> = the rep's ARIPs ÷ their attended appointments — how well they turn a met appointment into a signed contract. <b>ARIP → Closed</b> = deals closed ÷ ARIPs — how many signed deals actually close. Appointments are credited by role: <b>VPs</b> for appointments they <b>attended</b>, <b>AMs &amp; Follow-Ups</b> for appointments they <b>set</b>. Each count falls within the selected date range — <b>read this on This Quarter / This Year</b>; a one-month window is too thin to be meaningful. Scoped to <b>{drillLabel}</b>.</div>
           </Panel>);
       })()}
     </>) : (
@@ -2122,28 +2184,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>Of opps that reached each stage, the share that <b>ever reached the next core stage</b> (advancing or beyond) — the step-by-step probability of moving down the funnel. The <b>cumulative</b> figure chains every step. Anchored on entries in the selected period. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
-      {org.rep === "All" && stageConv.byVP.length > 0 && (
-        <Panel title={`Resolved close rate by VP (assigner) — ${drillLabel}`}>
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
-              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
-                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>VP</th>
-                {STAGE_CONV_FROM.map((f) => <th key={f.id} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{f.label.replace(" → Close", "")}</th>)}
-              </tr></thead>
-              <tbody>{stageConv.byVP.map((v) => (
-                <tr key={v.vp} style={{ color: T.ink }}>
-                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{v.vp}</td>
-                  {STAGE_CONV_FROM.map((f) => { const c = v.cells[f.id]; const n = c.win + c.miss; return (
-                    <td key={f.id} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(c.rate, 1, false) || {}) }}>
-                      {c.rate == null ? <span style={{ color: T.faint }}>—</span> : <>{Math.round(c.rate * 100)}%<span className="text-[9px]" style={{ color: T.faint }}> ·{n}</span></>}
-                    </td>); })}
-                </tr>))}
-              </tbody>
-            </table>
-          </div>
-          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Resolved close rate (Won ÷ resolved) per VP — credited by <b>Opportunity Owner</b>, i.e. who the opp is assigned under — for opps that entered each stage in the selected period. Small <b>·n</b> is the resolved deal count behind the %. Scoped to <b>{drillLabel}</b>.</div>
-        </Panel>
-      )}
       <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -2389,6 +2429,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r8 (VP revenue attribution → Sales)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r9 (rep conversion scorecard → Sales)</p>
   </>);
 }
