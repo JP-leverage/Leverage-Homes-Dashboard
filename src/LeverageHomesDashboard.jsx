@@ -780,10 +780,11 @@ STAGE_POS["ARIP"] = STAGE_POS["Arip"];
 const WON_STAGES = new Set(["Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won"]);
 const DEAD_STAGES = new Set(["Dead", "Dead With Escrow"]);
 // Classify a cohort deal's CURRENT stage relative to the stage it entered.
-const stageOutcome = (fromStage, cur) => {
-  cur = String(cur ?? "").trim();
-  if (WON_STAGES.has(cur)) return "win";
+const stageOutcome = (fromStage, o) => {
+  const cur = String(o.cur ?? "").trim();
+  if (o.won) return "win";                 // Won only if confirmed in the Closed Opps report
   if (DEAD_STAGES.has(cur)) return "miss";
+  if (WON_STAGES.has(cur)) return "exclude"; // in a closed stage but not in the Closed report → pending, not counted
   const fp = STAGE_POS[fromStage], cp = STAGE_POS[cur];
   if (cp == null) return "miss";        // off-ladder end state (flip/listing/etc.) → miss
   return cp < fp ? "miss" : "exclude";  // reverted below entry → miss; at/ahead & still open → in-flight
@@ -805,7 +806,7 @@ const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketi
 const isExcludedRecord = (r) => /front.?end/i.test(String(r.recordType ?? ""));
 // Roll transition-level rows up to one record per opp: current stage + first in-window entry date per stage,
 // plus owner/VP & AM (constant per opp). Rows arrive already org/rep/dir-gated (range=null); we date-anchor here.
-function stageOppAgg(rows) {
+function stageOppAgg(rows, closedSet) {
   const m = new Map();
   for (const r of rows) {
     const id = r.id; if (id == null || id === "") continue;
@@ -817,16 +818,18 @@ function stageOppAgg(rows) {
     const nv = String(r.newValue ?? "").trim();
     if (nv) { const t = parseDate(r.date); if (o.entered[nv] === undefined || (t && o.entered[nv] && o.entered[nv] > t)) o.entered[nv] = t || o.entered[nv] || null; }
   }
-  // Skip assumption: a deal that reached Under Contract (or closed Won) but never logged Buyer ARIP is
-  // assumed to have passed through it — credit a Buyer ARIP entry (dated by the UC entry, or the won entry as
-  // fallback) so flips that skip the stage aren't counted as a Marketing→Buyer ARIP leak or missing cohort.
-  m.forEach((o) => {
-    if ("Buyer ARIP" in o.entered) return;
-    let d = o.entered["Under Contract"];
-    if (d === undefined && WON_STAGES.has(o.cur)) {
-      for (const s of WON_STAGES) { const t = o.entered[s]; if (t && (d === undefined || (d && t < d))) d = t; }
+  // Skip assumption (symmetric): a Won deal that never logged a late stage is assumed to have passed through
+  // it — credit the entry so fast closers that skip Under Contract / Buyer ARIP aren't missing from those
+  // cohorts or read as leaks. Order matters: fill Under Contract first, then Buyer ARIP can inherit its date.
+  m.forEach((o, id) => {
+    o.won = closedSet ? closedSet.has(id) : WON_STAGES.has(o.cur); // Won = confirmed in Closed Opps report (fallback: current stage)
+    const wonDate = () => { let d; for (const s of WON_STAGES) { const t = o.entered[s]; if (t && (d === undefined || t < d)) d = t; } return d; };
+    if (!("Under Contract" in o.entered) && WON_STAGES.has(o.cur)) { const d = wonDate(); if (d !== undefined) o.entered["Under Contract"] = d || null; }
+    if (!("Buyer ARIP" in o.entered)) {
+      let d = o.entered["Under Contract"];
+      if (d === undefined && WON_STAGES.has(o.cur)) d = wonDate();
+      if (d !== undefined) o.entered["Buyer ARIP"] = d || null;
     }
-    if (d !== undefined) o.entered["Buyer ARIP"] = d || null;
   });
   return m;
 }
@@ -836,9 +839,9 @@ const enteredInRange = (o, stage, range) => {
   const t = o.entered[stage]; return !!(t && t >= range.start && t <= range.end);
 };
 const reachedStage = (o, stage) => {
-  if (stage === "Closed") return WON_STAGES.has(o.cur);  // reached Closed = currently in a Won state
+  if (stage === "Closed") return !!o.won;               // reached Closed = CONFIRMED won (in the Closed report)
   if (stage in o.entered) return true;                 // ever entered it
-  if (WON_STAGES.has(o.cur)) return true;              // closed ⇒ passed every prior gate
+  if (WON_STAGES.has(o.cur)) return true;              // physically in a closed stage ⇒ passed every prior gate
   const cp = STAGE_POS[o.cur], sp = STAGE_POS[stage];
   return !!(cp && sp && cp >= sp);                     // current stage at/ahead of it
 };
@@ -846,7 +849,7 @@ function stageReportA(agg, range) {
   return STAGE_CONV_FROM.map((f) => {
     let win = 0, miss = 0, inflight = 0;
     agg.forEach((o) => { if (!enteredInRange(o, f.stage, range)) return;
-      const k = stageOutcome(f.stage, o.cur); if (k === "win") win++; else if (k === "miss") miss++; else inflight++; });
+      const k = stageOutcome(f.stage, o); if (k === "win") win++; else if (k === "miss") miss++; else inflight++; });
     const resolved = win + miss;
     return { ...f, win, miss, inflight, cohort: win + miss + inflight, rate: resolved ? win / resolved : null };
   }).filter((r) => r.cohort > 0);
@@ -871,7 +874,7 @@ function stageReportByVP(agg, range, dir) {
     STAGE_CONV_FROM.forEach((f) => {
       let win = 0, miss = 0;
       agg.forEach((o) => { if (o.owner !== vp || !enteredInRange(o, f.stage, range)) return;
-        const k = stageOutcome(f.stage, o.cur); if (k === "win") win++; else if (k === "miss") miss++; });
+        const k = stageOutcome(f.stage, o); if (k === "win") win++; else if (k === "miss") miss++; });
       cells[f.id] = { win, miss, rate: (win + miss) ? win / (win + miss) : null };
     });
     return { vp, cells };
@@ -1956,7 +1959,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const stageConv = useMemo(() => {
     const all = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
     const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
-    const agg = stageOppAgg(rows);
+    const closedSet = new Set((store.closed_opps || []).map((r) => String(r.id ?? "").trim()).filter(Boolean)); // deals your Closed Opps report confirms as closed
+    const agg = stageOppAgg(rows, closedSet);
     return { A: stageReportA(agg, range), B: stageReportB(agg, range), byVP: stageReportByVP(agg, range, dir), opps: agg.size };
   }, [store, org, range, dir, txExclFlips]);
   // Period movement (stage flow) — entries/exits and advance/revert/dead by core stage, keyed on transition
@@ -2555,6 +2559,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r17 (Pipeline-by-stage moved to top of Transactions)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r19 (stage-conversion Won reconciled to Closed Opps report)</p>
   </>);
 }
