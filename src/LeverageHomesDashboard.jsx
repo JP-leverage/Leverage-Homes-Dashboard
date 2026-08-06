@@ -797,9 +797,9 @@ const STAGE_CONV_FROM = [
   { id: "buyerarip",  label: "Buyer ARIP → Close",     stage: "Buyer ARIP" },
   { id: "uc",         label: "Under Contract → Close", stage: "Under Contract" },
 ];
-const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract"];
+const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed"];
 const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketing": "Pre-Marketing",
-  "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract" };
+  "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract", "Closed": "Closed" };
 // Roll transition-level rows up to one record per opp: current stage + first in-window entry date per stage,
 // plus owner/VP & AM (constant per opp). Rows arrive already org/rep/dir-gated (range=null); we date-anchor here.
 function stageOppAgg(rows) {
@@ -822,6 +822,7 @@ const enteredInRange = (o, stage, range) => {
   const t = o.entered[stage]; return !!(t && t >= range.start && t <= range.end);
 };
 const reachedStage = (o, stage) => {
+  if (stage === "Closed") return WON_STAGES.has(o.cur);  // reached Closed = currently in a Won state
   if (stage in o.entered) return true;                 // ever entered it
   if (WON_STAGES.has(o.cur)) return true;              // closed ⇒ passed every prior gate
   const cp = STAGE_POS[o.cur], sp = STAGE_POS[stage];
@@ -861,6 +862,28 @@ function stageReportByVP(agg, range, dir) {
     });
     return { vp, cells };
   }).sort((a, b) => a.vp.localeCompare(b.vp));
+}
+// Stage FLOW for the selected period — movement, not outcomes. Counts stage transitions whose Edit Date
+// falls in the window: how many deals ENTERED each core stage, how many LEFT, and of those that left, how
+// many Advanced (moved forward or closed), Reverted (slipped to an earlier stage), or went Dead. Because it's
+// keyed on the transition date it reads cleanly on any window — including This Month — unlike the cohort
+// close rates, which wait on maturity. This is the real-time "what's happening now / where's the leak" view.
+function stageFlow(rows, range) {
+  const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+  const CORE = STAGE_CONV_CHAIN.filter((s) => s !== "Closed");
+  const stat = {}; CORE.forEach((s) => { stat[s] = { stage: s, label: STAGE_SHORT[s] || s, entered: 0, left: 0, adv: 0, rev: 0, dead: 0 }; });
+  for (const r of rows) {
+    if (!inR(r.date)) continue;
+    const ov = String(r.oldValue ?? "").trim(), nv = String(r.newValue ?? "").trim();
+    if (nv && stat[nv]) stat[nv].entered++;
+    if (ov && stat[ov]) { const e = stat[ov]; e.left++;
+      if (WON_STAGES.has(nv)) e.adv++;
+      else if (DEAD_STAGES.has(nv)) e.dead++;
+      else { const op = STAGE_POS[ov], np = STAGE_POS[nv];
+        if (np != null && op != null && np > op) e.adv++; else e.rev++; } }
+  }
+  return CORE.map((s) => { const e = stat[s];
+    return { ...e, advPct: e.left ? e.adv / e.left : null, revPct: e.left ? e.rev / e.left : null, deadPct: e.left ? e.dead / e.left : null }; });
 }
 // Appointment outcome semantics (JP spec):
 //   attended  = "Appointment Met" ONLY. Anything containing "no show" / "missed" is a miss —
@@ -1917,6 +1940,12 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const agg = stageOppAgg(rows);
     return { A: stageReportA(agg, range), B: stageReportB(agg, range), byVP: stageReportByVP(agg, range, dir), opps: agg.size };
   }, [store, org, range, dir]);
+  // Period movement (stage flow) — entries/exits and advance/revert/dead by core stage, keyed on transition
+  // date so it reads cleanly on any window (even This Month), unlike the maturity-bound cohort close rates.
+  const stageFlowData = useMemo(() => {
+    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    return stageFlow(rows, range);
+  }, [store, org, range, dir]);
   // Revenue attributed to each VP, two ways: per assigned opp and per appointment. All from already-loaded
   // datasets. Opps assigned + closed revenue carry Opportunity Owner (the VP) directly; appointments are
   // attributed to a VP by joining the appt's Opportunity Name to that opp's owner (name→owner map built from
@@ -2184,6 +2213,36 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>Of opps that reached each stage, the share that <b>ever reached the next core stage</b> (advancing or beyond) — the step-by-step probability of moving down the funnel. The <b>cumulative</b> figure chains every step. Anchored on entries in the selected period. Scoped to <b>{drillLabel}</b>.</div>
       </Panel>
+      {(() => { const maxAdv = Math.max(0.0001, ...stageFlowData.map((s) => s.advPct || 0));
+        const anyFlow = stageFlowData.some((s) => s.entered || s.left);
+        return (
+      <Panel title={`Stage flow this period · movement & leaks — ${drillLabel}`}>
+        {anyFlow ? (
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 600 }}>
+              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Entered</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Left</th>
+                <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Advanced</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Reverted</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Dead</th>
+              </tr></thead>
+              <tbody>{stageFlowData.map((s) => (
+                <tr key={s.stage} style={{ color: T.ink }}>
+                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{s.entered}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{s.left}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(s.advPct, maxAdv, false) || {}) }}>{s.left ? <>{s.adv}<span className="text-[10px]" style={{ color: T.faint }}> · {Math.round(s.advPct * 100)}%</span></> : <span style={{ color: T.faint }}>—</span>}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", color: s.rev ? T.warn : T.faint }}>{s.left ? <>{s.rev}<span className="text-[10px]" style={{ color: T.faint }}> · {Math.round(s.revPct * 100)}%</span></> : "—"}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", color: s.dead ? T.bad : T.faint }}>{s.left ? <>{s.dead}<span className="text-[10px]" style={{ color: T.faint }}> · {Math.round(s.deadPct * 100)}%</span></> : "—"}</td>
+                </tr>))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No stage movement in the selected period for this scope.</div>}
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>This is <b>movement during the selected period</b>, not outcomes — so it reads cleanly on any window, even This Month. <b>Entered</b> = deals that moved into the stage; <b>Left</b> = deals that moved out. Of those that left: <b>Advanced</b> = moved forward or closed; <b>Reverted</b> = slipped back to an earlier stage; <b>Dead</b> = died. The stage with the highest Reverted/Dead is where deals are leaking <b>right now</b>. Counts stage transitions dated in the window. Scoped to <b>{drillLabel}</b>.</div>
+      </Panel>); })()}
       <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -2429,6 +2488,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r9 (rep conversion scorecard → Sales)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r11 (UC→Close step + stage-flow pulse)</p>
   </>);
 }
