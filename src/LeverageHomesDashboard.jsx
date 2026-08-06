@@ -156,6 +156,17 @@ const DATASETS = {
       marketingDate: "Date Moved to Marketing", buyerAripDate: "Date Moved to Buyer ARIP", underContractDate: "Under Contract Date" },
     dedupe: (r) => r.id, dateField: null, repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
+  stage_history: {
+    // Transactions workbook — "All Opportunity Stage History x YTD" tab. Full StageName transition log:
+    // one row per stage change (Old Value → New Value, Edit Date), plus a "Stage" column that is the opp's
+    // CURRENT stage repeated on every row, and the rep fields. Powers the stage-conversion/probability engine.
+    workbook: "transactions",
+    require: ["Opportunity ID", "New Value", "Stage", "Edit Date"], exclude: [], tabInclude: /All Opportunity Stage History/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", recordType: "Opportunity Record Type", txType: "Transaction Type",
+      oldValue: "Old Value", newValue: "New Value", stage: "Stage",
+      owner: "Opportunity Owner", acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist" },
+    dedupe: null, dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+  },
   contracts_sent: {
     // Tasks workbook — "Contracts Sent x YTD - VPs" tab. Standard Salesforce Activity export
     // (same shape as the Talk Time tabs): one row per "Contract Sent" activity, credited to the
@@ -249,7 +260,7 @@ const DATASETS = {
   opps_assigned: {
     workbook: "opportunities_pt2",
     require: [], exclude: [], tabInclude: /Opps Assigned x YTD/i, tabField: "__tab",
-    schema: { id: "Opportunity ID", name: "Opportunity Name", createdBy: "Created By", tab: "__tab" },
+    schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", createdBy: "Created By", tab: "__tab" },
     dedupe: (r) => (r.id ? `${r.tab}|${r.id}` : null), dateField: "date",
     dateCandidates: ["Created Date", "Create Date"], repField: "rep",
   },
@@ -747,6 +758,109 @@ function txDurCell(c) {
   if (!c || c.median == null) return <span style={{ color: T.faint }}>—</span>;
   return (<><span>{Math.round(c.median)}<span style={{ color: T.faint, fontWeight: 400 }}> d</span></span>
     <div className="text-[9px] leading-none" style={{ color: T.faint }}>avg {Math.round(c.avg)}d · {c.n}</div></>);
+}
+// ── Stage CONVERSION / PROBABILITY engine (Transactions view) ────────────────────────────────────────
+// Source: "All Opportunity Stage History x YTD" (stage_history dataset). Two reports off one engine:
+//   A) Resolved close rate — of opps that ENTERED a stage in the selected period, the share that reached a
+//      Closed (Won) state, measured over RESOLVED deals only. A deal still at/ahead in the ladder is
+//      excluded as in-flight; a deal that reverted below where it entered — or is Dead — is a miss.
+//   B) Adjacent advance % — of opps that reached stage A, the share that ever reached the next core stage
+//      B (chainable down the funnel).
+// STAGE_ORDER is JP's exact stage sequence; positions decide "reverted (miss) vs still-advancing (in-flight)".
+// Closed variants collapse to one Won bucket; Dead+Dead With Escrow are the only misses-by-outcome. Deals
+// bounce between early stages and can revive (Dead→New), which is why cohorts anchor on first entry and
+// outcome is read from the single current-stage column rather than the last transition.
+const STAGE_ORDER = ["New", "Short Term Nurture", "Cadence Replied", "Nurture", "Appointment Set",
+  "Underwriting Complete", "Appt Set Offering", "Appointment DNH", "Negotiation", "Red Zone",
+  "Arip", "Deal Review", "Investment Committee (IC)", "Delayed Marketing", "Renegotiation",
+  "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Pre Closing"];
+const STAGE_POS = STAGE_ORDER.reduce((m, s, i) => { m[s] = i + 1; return m; }, {});
+STAGE_POS["Investment Committee"] = STAGE_POS["Investment Committee (IC)"]; // data uses the "(IC)" suffix
+STAGE_POS["ARIP"] = STAGE_POS["Arip"];
+const WON_STAGES = new Set(["Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won"]);
+const DEAD_STAGES = new Set(["Dead", "Dead With Escrow"]);
+// Classify a cohort deal's CURRENT stage relative to the stage it entered.
+const stageOutcome = (fromStage, cur) => {
+  cur = String(cur ?? "").trim();
+  if (WON_STAGES.has(cur)) return "win";
+  if (DEAD_STAGES.has(cur)) return "miss";
+  const fp = STAGE_POS[fromStage], cp = STAGE_POS[cur];
+  if (cp == null) return "miss";        // off-ladder end state (flip/listing/etc.) → miss
+  return cp < fp ? "miss" : "exclude";  // reverted below entry → miss; at/ahead & still open → in-flight
+};
+// Report-A from-stages and Report-B adjacent chain (data labels).
+const STAGE_CONV_FROM = [
+  { id: "arip",       label: "ARIP → Close",          stage: "Arip" },
+  { id: "dealreview", label: "Deal Review → Close",    stage: "Deal Review" },
+  { id: "premkt",     label: "Pre-Marketing → Close",  stage: "Pre Marketing" },
+  { id: "mkt",        label: "Marketing → Close",      stage: "Marketing" },
+  { id: "buyerarip",  label: "Buyer ARIP → Close",     stage: "Buyer ARIP" },
+  { id: "uc",         label: "Under Contract → Close", stage: "Under Contract" },
+];
+const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract"];
+const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketing": "Pre-Marketing",
+  "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract" };
+// Roll transition-level rows up to one record per opp: current stage + first in-window entry date per stage,
+// plus owner/VP & AM (constant per opp). Rows arrive already org/rep/dir-gated (range=null); we date-anchor here.
+function stageOppAgg(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const id = r.id; if (id == null || id === "") continue;
+    let o = m.get(id);
+    if (!o) { o = { cur: "", owner: String(r.owner ?? "").trim(), am: String(r.acqManager ?? "").trim(), entered: {} }; m.set(id, o); }
+    const st = String(r.stage ?? "").trim(); if (st) o.cur = st;      // current stage (constant per opp)
+    if (!o.owner && r.owner) o.owner = String(r.owner).trim();
+    if (!o.am && r.acqManager) o.am = String(r.acqManager).trim();
+    const nv = String(r.newValue ?? "").trim();
+    if (nv) { const t = parseDate(r.date); if (o.entered[nv] === undefined || (t && o.entered[nv] && o.entered[nv] > t)) o.entered[nv] = t || o.entered[nv] || null; }
+  }
+  return m;
+}
+const enteredInRange = (o, stage, range) => {
+  if (!(stage in o.entered)) return false;
+  if (!range) return true;
+  const t = o.entered[stage]; return !!(t && t >= range.start && t <= range.end);
+};
+const reachedStage = (o, stage) => {
+  if (stage in o.entered) return true;                 // ever entered it
+  if (WON_STAGES.has(o.cur)) return true;              // closed ⇒ passed every prior gate
+  const cp = STAGE_POS[o.cur], sp = STAGE_POS[stage];
+  return !!(cp && sp && cp >= sp);                     // current stage at/ahead of it
+};
+function stageReportA(agg, range) {
+  return STAGE_CONV_FROM.map((f) => {
+    let win = 0, miss = 0, inflight = 0;
+    agg.forEach((o) => { if (!enteredInRange(o, f.stage, range)) return;
+      const k = stageOutcome(f.stage, o.cur); if (k === "win") win++; else if (k === "miss") miss++; else inflight++; });
+    const resolved = win + miss;
+    return { ...f, win, miss, inflight, cohort: win + miss + inflight, rate: resolved ? win / resolved : null };
+  }).filter((r) => r.cohort > 0);
+}
+function stageReportB(agg, range) {
+  const steps = [];
+  for (let i = 0; i < STAGE_CONV_CHAIN.length - 1; i++) {
+    const a = STAGE_CONV_CHAIN[i], b = STAGE_CONV_CHAIN[i + 1];
+    let base = 0, adv = 0;
+    agg.forEach((o) => { if (!enteredInRange(o, a, range)) return; base++; if (reachedStage(o, b)) adv++; });
+    steps.push({ id: a + ">" + b, from: STAGE_SHORT[a] || a, to: STAGE_SHORT[b] || b, base, adv, rate: base ? adv / base : null });
+  }
+  return steps;
+}
+// Resolved close rate broken out by VP (Opportunity Owner = the assigner) across every from-stage.
+function stageReportByVP(agg, range, dir) {
+  const isVP = (name) => /president|vp\b/i.test(dir?.byRep?.[name]?.role || "");
+  const names = new Set();
+  agg.forEach((o) => { if (o.owner && isVP(o.owner)) names.add(o.owner); });
+  return [...names].map((vp) => {
+    const cells = {};
+    STAGE_CONV_FROM.forEach((f) => {
+      let win = 0, miss = 0;
+      agg.forEach((o) => { if (o.owner !== vp || !enteredInRange(o, f.stage, range)) return;
+        const k = stageOutcome(f.stage, o.cur); if (k === "win") win++; else if (k === "miss") miss++; });
+      cells[f.id] = { win, miss, rate: (win + miss) ? win / (win + miss) : null };
+    });
+    return { vp, cells };
+  }).sort((a, b) => a.vp.localeCompare(b.vp));
 }
 // Appointment outcome semantics (JP spec):
 //   attended  = "Appointment Met" ONLY. Anything containing "no show" / "missed" is a miss —
@@ -1795,6 +1909,36 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     });
     return { types, byTransition, total: rows.length };
   }, [store, org, range, dir, inDir]);
+  // Stage conversion / probability — Report A (resolved close rate), Report B (adjacent advance %), and the
+  // per-VP close-rate matrix. All anchored on first entry into a stage within the selected period; org/rep/dir
+  // scoping is applied at load (range=null) and the period window is applied on the entry date inside the engine.
+  const stageConv = useMemo(() => {
+    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const agg = stageOppAgg(rows);
+    return { A: stageReportA(agg, range), B: stageReportB(agg, range), byVP: stageReportByVP(agg, range, dir), opps: agg.size };
+  }, [store, org, range, dir]);
+  // Revenue attributed to each VP, two ways: per assigned opp and per appointment. All from already-loaded
+  // datasets. Opps assigned + closed revenue carry Opportunity Owner (the VP) directly; appointments are
+  // attributed to a VP by joining the appt's Opportunity Name to that opp's owner (name→owner map built from
+  // the full stage-history, ~99% match). Each source is date-filtered on its own date within the selected range.
+  const vpAttribution = useMemo(() => {
+    const isVP = (n) => /president|vp\b/i.test(dir?.byRep?.[n]?.role || "");
+    const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+    const name2owner = {};
+    (store.stage_history || []).forEach((r) => { const nm = String(r.name ?? "").trim(), ow = String(r.owner ?? "").trim(); if (nm && ow && !(nm in name2owner)) name2owner[nm] = ow; });
+    const oppsAssigned = {}, seen = {};
+    (store.opps_assigned || []).forEach((r) => { const ow = String(r.owner ?? "").trim(); if (!isVP(ow) || !inR(r.date)) return;
+      const k = ow + "|" + r.id; if (r.id && seen[k]) return; if (r.id) seen[k] = 1; oppsAssigned[ow] = (oppsAssigned[ow] || 0) + 1; });
+    const rev = {}, deals = {};
+    (store.closed_opps || []).forEach((r) => { const ow = String(r.owner ?? "").trim(); if (!isVP(ow) || !inR(r.closeDate)) return;
+      rev[ow] = (rev[ow] || 0) + num(r.revenue); deals[ow] = (deals[ow] || 0) + 1; });
+    const apptN = {};
+    (store.appointments || []).forEach((r) => { const ow = name2owner[String(r.name ?? "").trim()]; if (ow && isVP(ow) && inR(r.date)) apptN[ow] = (apptN[ow] || 0) + 1; });
+    const vps = [...new Set([...Object.keys(oppsAssigned), ...Object.keys(rev), ...Object.keys(apptN)])].filter(isVP);
+    return vps.map((vp) => ({ vp, oppsAssigned: oppsAssigned[vp] || 0, appts: apptN[vp] || 0, rev: rev[vp] || 0, deals: deals[vp] || 0,
+      revPerAppt: apptN[vp] ? (rev[vp] || 0) / apptN[vp] : null, revPerAssigned: oppsAssigned[vp] ? (rev[vp] || 0) / oppsAssigned[vp] : null }))
+      .sort((a, b) => b.rev - a.rev);
+  }, [store, range, dir]);
   const isClosedStage = (s) => /closed|escrow|owned/i.test(String(s || ""));
   const mktPipeByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => !isClosedStage(o.stage) && inCloseFwd(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, rangeFwd, dir]);
@@ -1818,6 +1962,39 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <CardGrid ids={salesLeadingCall} results={results} breakouts={breakouts} sparks={sparks} />
       </>)}
       {org.rep !== "All" && <RepTrendStrip ids={["opps_to_arip", "opps_created", "appointments", "calls", "talk_time", "leads_claimed"]} sparks={sparks} results={results} />}
+      {org.rep === "All" && vpAttribution.length > 0 && (() => {
+        const maxRev = Math.max(1, ...vpAttribution.map((v) => v.rev));
+        const maxRPA = Math.max(1, ...vpAttribution.map((v) => v.revPerAppt || 0));
+        const maxRAO = Math.max(1, ...vpAttribution.map((v) => v.revPerAssigned || 0));
+        return (
+          <Panel title={`Revenue attributed by VP — ${drillLabel}`}>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 680 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>VP</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Opps Assigned</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Appointments</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Closed Revenue</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Deals</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Rev / Appt</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Rev / Assigned Opp</th>
+                </tr></thead>
+                <tbody>{vpAttribution.map((v) => (
+                  <tr key={v.vp} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{v.vp}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{v.oppsAssigned.toLocaleString()}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{v.appts.toLocaleString()}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(v.rev, maxRev, false) || {}) }}>{fmt(v.rev, "currency")}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{v.deals}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(v.revPerAppt, maxRPA, false) || {}) }}>{v.revPerAppt == null ? <span style={{ color: T.faint }}>—</span> : fmt(v.revPerAppt, "currency")}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(v.revPerAssigned, maxRAO, false) || {}) }}>{v.revPerAssigned == null ? <span style={{ color: T.faint }}>—</span> : fmt(v.revPerAssigned, "currency")}</td>
+                  </tr>))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>Revenue</b> is closed (realized) Total Forecasted Revenue on each VP's won deals in the period. <b>Rev / Appt</b> = that revenue ÷ the appointments on the VP's deals (each appointment tied to a VP by the deal it's on). <b>Rev / Assigned Opp</b> = that revenue ÷ opps assigned under the VP. Together they show how efficiently a VP turns assignments and appointments into closed revenue. Opps assigned &amp; appointments date on their own created dates; revenue on close date. Scoped to <b>{drillLabel}</b>.</div>
+          </Panel>);
+      })()}
     </>) : (
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
@@ -1893,6 +2070,80 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>{selLabel}</b> — median days (average &amp; deal count beneath) per rep, sorted fastest first, for deals that <b>closed in the selected period</b>. A deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so a rep appears in every deal they were on. Pick another transition above. Scoped to <b>{drillLabel}</b>.</div>
         </Panel>);
       })()}
+      <Panel title="Stage conversion & probability — how to read this">
+        <ul className="flex flex-col gap-2 text-[12.5px] leading-snug" style={{ color: T.sub }}>
+          <li><b style={{ color: T.ink }}>Resolved close rate</b> answers: of the deals that reached a stage, what share ended up closing? It counts only deals that have <i>finished playing out</i> — they either closed (a <b style={{ color: T.ink }}>Won</b>) or died / slid back to an earlier stage (a <b style={{ color: T.ink }}>Miss</b>). Deals still moving forward are set aside as <b style={{ color: T.ink }}>In-flight</b> and don't count yet. So "ARIP → Close 30%" means: of the ARIP deals that have resolved, 30% closed.</li>
+          <li><b style={{ color: T.ink }}>Advance probability</b> answers: at each step, what share of deals made it to the next stage? Read top-to-bottom to see where deals fall out — the <b style={{ color: T.ink }}>lowest number is your biggest leak</b>. The <b style={{ color: T.ink }}>Cumulative</b> line multiplies every step to show the odds of a deal traveling the whole way.</li>
+          <li><b style={{ color: T.ink }}>By VP</b> is the same close rate split by the VP the deal is assigned under, so you can compare conversion across VPs. The small <b style={{ color: T.ink }}>·n</b> is how many resolved deals sit behind each %.</li>
+          <li>Every number is based on deals that <b style={{ color: T.ink }}>first entered a stage inside the date range selected up top</b>. A narrow range (like This Month) shows fewer deals — widen it for a fuller picture.</li>
+        </ul>
+      </Panel>
+      <Panel title={`Stage conversion · resolved close rate — ${drillLabel}`}>
+        {stageConv.A.length ? (
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 560 }}>
+              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage → Close</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Cohort</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Won</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Miss</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>In-flight</th>
+                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Close %</th>
+              </tr></thead>
+              <tbody>{stageConv.A.map((m) => (
+                <tr key={m.id} style={{ color: T.ink }}>
+                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.cohort}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.win}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{m.miss}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{m.inflight}</td>
+                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(m.rate, 1, false) || {}) }}>{m.rate == null ? "—" : Math.round(m.rate * 100) + "%"}</td>
+                </tr>))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>Close %</b> = Won ÷ (Won + Miss) — resolved deals only. <b>In-flight</b> deals (currently at or ahead of the entry stage) are excluded from the %; a deal that reverted below where it entered, or is Dead, is a <b>Miss</b>. Closed Won / With Escrow / in Accounting Reconciliation all count as Won. Cohort = opps that <b>entered</b> the stage in the selected period (anchored on first entry). Widen the date range for fuller cohorts. Scoped to <b>{drillLabel}</b>.</div>
+      </Panel>
+      <Panel title={`Stage-to-stage advance probability — ${drillLabel}`}>
+        {stageConv.B.length ? (<div className="flex flex-col gap-3 pt-1">
+          {stageConv.B.map((s) => (
+            <div key={s.id} className="flex items-center gap-3">
+              <div className="text-[14px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{s.from} → {s.to} <span style={{ color: T.faint }}>({s.adv}/{s.base})</span></div>
+              <div className="hidden sm:block flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 260 }}><div style={{ width: `${Math.round((s.rate || 0) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
+              <div className="text-[18px] font-bold text-right shrink-0" style={{ width: 64, fontVariantNumeric: "tabular-nums", color: T.ink }}>{s.rate == null ? "—" : Math.round(s.rate * 100) + "%"}</div>
+            </div>))}
+          {(() => { const cum = stageConv.B.reduce((p, s) => p * (s.rate == null ? 1 : s.rate), 1);
+            const first = stageConv.B[0], last = stageConv.B[stageConv.B.length - 1];
+            return (<div className="flex items-center gap-3 mt-1 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
+              <div className="text-[13px] flex-1 min-w-0 truncate font-semibold" style={{ color: T.sub }}>Cumulative · {first.from} → {last.to}</div>
+              <div className="text-[18px] font-bold text-right shrink-0" style={{ width: 64, fontVariantNumeric: "tabular-nums", color: T.accent }}>{Math.round(cum * 100)}%</div>
+            </div>); })()}
+        </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Of opps that reached each stage, the share that <b>ever reached the next core stage</b> (advancing or beyond) — the step-by-step probability of moving down the funnel. The <b>cumulative</b> figure chains every step. Anchored on entries in the selected period. Scoped to <b>{drillLabel}</b>.</div>
+      </Panel>
+      {org.rep === "All" && stageConv.byVP.length > 0 && (
+        <Panel title={`Resolved close rate by VP (assigner) — ${drillLabel}`}>
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 640 }}>
+              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>VP</th>
+                {STAGE_CONV_FROM.map((f) => <th key={f.id} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{f.label.replace(" → Close", "")}</th>)}
+              </tr></thead>
+              <tbody>{stageConv.byVP.map((v) => (
+                <tr key={v.vp} style={{ color: T.ink }}>
+                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{v.vp}</td>
+                  {STAGE_CONV_FROM.map((f) => { const c = v.cells[f.id]; const n = c.win + c.miss; return (
+                    <td key={f.id} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(c.rate, 1, false) || {}) }}>
+                      {c.rate == null ? <span style={{ color: T.faint }}>—</span> : <>{Math.round(c.rate * 100)}%<span className="text-[9px]" style={{ color: T.faint }}> ·{n}</span></>}
+                    </td>); })}
+                </tr>))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Resolved close rate (Won ÷ resolved) per VP — credited by <b>Opportunity Owner</b>, i.e. who the opp is assigned under — for opps that entered each stage in the selected period. Small <b>·n</b> is the resolved deal count behind the %. Scoped to <b>{drillLabel}</b>.</div>
+        </Panel>
+      )}
       <Panel title={`Pipeline YTD · forecast by stage — ${drillLabel}`}>{byStage.length ? (<><div style={{ height: Math.max(300, byStage.length * 38) }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
@@ -2138,6 +2389,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-04 · v2-features-r5 (tx stage durations + per-rep)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r8 (VP revenue attribution → Sales)</p>
   </>);
 }
