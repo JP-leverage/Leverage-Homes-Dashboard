@@ -824,10 +824,10 @@ function stageOppAgg(rows, closedSet) {
   m.forEach((o, id) => {
     o.won = closedSet ? closedSet.has(id) : WON_STAGES.has(o.cur); // Won = confirmed in Closed Opps report (fallback: current stage)
     const wonDate = () => { let d; for (const s of WON_STAGES) { const t = o.entered[s]; if (t && (d === undefined || t < d)) d = t; } return d; };
-    if (!("Under Contract" in o.entered) && WON_STAGES.has(o.cur)) { const d = wonDate(); if (d !== undefined) o.entered["Under Contract"] = d || null; }
+    if (!("Under Contract" in o.entered) && o.won) { const d = wonDate(); if (d !== undefined) o.entered["Under Contract"] = d || null; }
     if (!("Buyer ARIP" in o.entered)) {
       let d = o.entered["Under Contract"];
-      if (d === undefined && WON_STAGES.has(o.cur)) d = wonDate();
+      if (d === undefined && o.won) d = wonDate();
       if (d !== undefined) o.entered["Buyer ARIP"] = d || null;
     }
   });
@@ -841,7 +841,7 @@ const enteredInRange = (o, stage, range) => {
 const reachedStage = (o, stage) => {
   if (stage === "Closed") return !!o.won;               // reached Closed = CONFIRMED won (in the Closed report)
   if (stage in o.entered) return true;                 // ever entered it
-  if (WON_STAGES.has(o.cur)) return true;              // physically in a closed stage ⇒ passed every prior gate
+  if (o.won) return true;                              // confirmed closed ⇒ passed every prior gate
   const cp = STAGE_POS[o.cur], sp = STAGE_POS[stage];
   return !!(cp && sp && cp >= sp);                     // current stage at/ahead of it
 };
@@ -2559,6 +2559,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r19 (stage-conversion Won reconciled to Closed Opps report)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r20 (unified closed definition across engine · consistent w/ Closed report)</p>
   </>);
 }
