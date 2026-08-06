@@ -800,9 +800,9 @@ const STAGE_CONV_FROM = [
 const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed"];
 const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketing": "Pre-Marketing",
   "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract", "Closed": "Closed" };
-// Front-/back-end purchases and Fix & Flip transactions legitimately skip Buyer ARIP. The Transactions
-// stage panels expose a toggle to pull these out entirely; this is the membership test for that toggle.
-const isExcludedRecord = (r) => /front.?end|back.?end/i.test(String(r.recordType ?? "")) || /fix\s*&?\s*flip/i.test(String(r.txType ?? ""));
+// Front-end purchases legitimately skip Buyer ARIP. The Transactions stage panels expose a toggle to pull
+// these out entirely; this is the membership test for that toggle.
+const isExcludedRecord = (r) => /front.?end/i.test(String(r.recordType ?? ""));
 // Roll transition-level rows up to one record per opp: current stage + first in-window entry date per stage,
 // plus owner/VP & AM (constant per opp). Rows arrive already org/rep/dir-gated (range=null); we date-anchor here.
 function stageOppAgg(rows) {
@@ -1640,6 +1640,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
   const [txStageMetric, setTxStageMetric] = useState("arip_close"); // which stage transition the per-rep table shows
   const [txExclFlips, setTxExclFlips] = useState(false); // Transactions stage panels: pull out front/back-end + Fix & Flip
+  const [stageLens, setStageLens] = useState("close"); // merged stage panel: "close" (resolved rate) | "advance"
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -1963,6 +1964,22 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
     return stageFlow(rows, range);
   }, [store, org, range, dir, txExclFlips]);
+  // Total forecasted revenue of deals that moved to Under Contract in the period. Under-Contract entries come
+  // from the stage-history (skip toggle respected); forecast $ is joined by Opportunity Name from the pipeline
+  // forecast tab, falling back to closed-opp forecast. Deals not present in either forecast source contribute $0.
+  const ucForecast = useMemo(() => {
+    const fmap = {};
+    (store.pipeline || []).forEach((r) => { const nm = String(r.name ?? "").trim(); if (nm && !(nm in fmap)) fmap[nm] = num(r.forecast); });
+    (store.closed_opps || []).forEach((r) => { const nm = String(r.name ?? "").trim(); if (nm && !(nm in fmap)) fmap[nm] = num(r.revenue); });
+    const all = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
+    const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+    const seen = new Set(); let total = 0, n = 0;
+    rows.forEach((r) => { if (String(r.newValue ?? "").trim() !== "Under Contract" || !inR(r.date)) return;
+      const id = r.id; if (id && seen.has(id)) return; if (id) seen.add(id);
+      total += fmap[String(r.name ?? "").trim()] || 0; n++; });
+    return { total, n };
+  }, [store, org, range, dir, txExclFlips]);
   // Revenue attributed to each VP, two ways: per assigned opp and per appointment. All from already-loaded
   // datasets. Opps assigned + closed revenue carry Opportunity Owner (the VP) directly; appointments are
   // attributed to a VP by joining the appt's Opportunity Name to that opp's owner (name→owner map built from
@@ -2181,64 +2198,70 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       <Panel title="Stage conversion & probability — how to read this">
         <ul className="flex flex-col gap-2 text-[12.5px] leading-snug" style={{ color: T.sub }}>
           <li><b style={{ color: T.ink }}>Resolved close rate</b> answers: of the deals that reached a stage, what share ended up closing? It counts only deals that have <i>finished playing out</i> — they either closed (a <b style={{ color: T.ink }}>Won</b>) or died / slid back to an earlier stage (a <b style={{ color: T.ink }}>Miss</b>). Deals still moving forward are set aside as <b style={{ color: T.ink }}>In-flight</b> and don't count yet. So "ARIP → Close 30%" means: of the ARIP deals that have resolved, 30% closed.</li>
-          <li><b style={{ color: T.ink }}>Advance probability</b> answers: at each step, what share of deals made it to the next stage? Read top-to-bottom to see where deals fall out — the <b style={{ color: T.ink }}>lowest number is your biggest leak</b>. The <b style={{ color: T.ink }}>Cumulative</b> line multiplies every step to show the odds of a deal traveling the whole way.</li>
-          <li><b style={{ color: T.ink }}>By VP</b> is the same close rate split by the VP the deal is assigned under, so you can compare conversion across VPs. The small <b style={{ color: T.ink }}>·n</b> is how many resolved deals sit behind each %.</li>
+          <li><b style={{ color: T.ink }}>Advance probability</b> answers: at each step, what share of deals made it to the next stage? Read top-to-bottom to see where deals fall out — the <b style={{ color: T.ink }}>lowest number is your biggest leak</b>. Switch between Close rate and Advance probability with the toggle on the panel.</li>
+          <li><b style={{ color: T.ink }}>Forecast → Under Contract</b> (top-right) is the total forecasted revenue of deals that moved into Under Contract in the period — how much dollar value reached the contract stage.</li>
           <li>Every number is based on deals that <b style={{ color: T.ink }}>first entered a stage inside the date range selected up top</b>. A narrow range (like This Month) shows fewer deals — widen it for a fuller picture.</li>
         </ul>
       </Panel>
       <div className="flex items-center gap-3 flex-wrap px-1 -mt-1">
         <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Record types</span>
         <div className="flex rounded-lg p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
-          {[["all", "All record types"], ["excl", "Exclude flips / front & back-end"]].map(([v, l]) => {
+          {[["all", "All record types"], ["excl", "Exclude front-end"]].map(([v, l]) => {
             const active = (v === "excl") === txExclFlips;
             return (<button key={v} onClick={() => setTxExclFlips(v === "excl")} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
               style={{ background: active ? T.card : "transparent", color: active ? T.ink : T.sub, boxShadow: active ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>); })}
         </div>
         <span className="text-[11px]" style={{ color: T.faint }}>Deals that skip to Under Contract are assumed to have passed through Buyer ARIP.</span>
       </div>
-      <Panel title={`Stage conversion · resolved close rate — ${drillLabel}`}>
-        {stageConv.A.length ? (
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 560 }}>
-              <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
-                <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage → Close</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Cohort</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Won</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Miss</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>In-flight</th>
-                <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Close %</th>
-              </tr></thead>
-              <tbody>{stageConv.A.map((m) => (
-                <tr key={m.id} style={{ color: T.ink }}>
-                  <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.cohort}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.win}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{m.miss}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{m.inflight}</td>
-                  <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(m.rate, 1, false) || {}) }}>{m.rate == null ? "—" : Math.round(m.rate * 100) + "%"}</td>
-                </tr>))}
-              </tbody>
-            </table>
+      <Panel title={`Stage conversion — ${drillLabel}`}>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div className="flex rounded-lg p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+            {[["close", "Close rate"], ["advance", "Advance probability"]].map(([v, l]) => (
+              <button key={v} onClick={() => setStageLens(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+                style={{ background: stageLens === v ? T.card : "transparent", color: stageLens === v ? T.ink : T.sub, boxShadow: stageLens === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
           </div>
-        ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>Close %</b> = Won ÷ (Won + Miss) — resolved deals only. <b>In-flight</b> deals (currently at or ahead of the entry stage) are excluded from the %; a deal that reverted below where it entered, or is Dead, is a <b>Miss</b>. Closed Won / With Escrow / in Accounting Reconciliation all count as Won. Cohort = opps that <b>entered</b> the stage in the selected period (anchored on first entry). Widen the date range for fuller cohorts. Scoped to <b>{drillLabel}</b>.</div>
-      </Panel>
-      <Panel title={`Stage-to-stage advance probability — ${drillLabel}`}>
-        {stageConv.B.length ? (<div className="flex flex-col gap-3 pt-1">
-          {stageConv.B.map((s) => (
-            <div key={s.id} className="flex items-center gap-3">
-              <div className="text-[14px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{s.from} → {s.to} <span style={{ color: T.faint }}>({s.adv}/{s.base})</span></div>
-              <div className="hidden sm:block flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 260 }}><div style={{ width: `${Math.round((s.rate || 0) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
-              <div className="text-[18px] font-bold text-right shrink-0" style={{ width: 64, fontVariantNumeric: "tabular-nums", color: T.ink }}>{s.rate == null ? "—" : Math.round(s.rate * 100) + "%"}</div>
-            </div>))}
-          {(() => { const cum = stageConv.B.reduce((p, s) => p * (s.rate == null ? 1 : s.rate), 1);
-            const first = stageConv.B[0], last = stageConv.B[stageConv.B.length - 1];
-            return (<div className="flex items-center gap-3 mt-1 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
-              <div className="text-[13px] flex-1 min-w-0 truncate font-semibold" style={{ color: T.sub }}>Cumulative · {first.from} → {last.to}</div>
-              <div className="text-[18px] font-bold text-right shrink-0" style={{ width: 64, fontVariantNumeric: "tabular-nums", color: T.accent }}>{Math.round(cum * 100)}%</div>
-            </div>); })()}
-        </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Of opps that reached each stage, the share that <b>ever reached the next core stage</b> (advancing or beyond) — the step-by-step probability of moving down the funnel. The <b>cumulative</b> figure chains every step. Anchored on entries in the selected period. Scoped to <b>{drillLabel}</b>.</div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: T.faint }}>Forecast → Under Contract</div>
+            <div className="text-[18px] font-bold leading-none" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(ucForecast.total, "currency")} <span className="text-[11px] font-normal" style={{ color: T.faint }}>· {ucForecast.n} {ucForecast.n === 1 ? "deal" : "deals"}</span></div>
+          </div>
+        </div>
+        {stageLens === "close" ? (<>
+          {stageConv.A.length ? (
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 560 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Stage → Close</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Cohort</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Won</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Miss</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>In-flight</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Close %</th>
+                </tr></thead>
+                <tbody>{stageConv.A.map((m) => (
+                  <tr key={m.id} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.cohort}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{m.win}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{m.miss}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{m.inflight}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(m.rate, 1, false) || {}) }}>{m.rate == null ? "—" : Math.round(m.rate * 100) + "%"}</td>
+                  </tr>))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}><b>Close %</b> = Won ÷ (Won + Miss) — resolved deals only. <b>In-flight</b> deals (currently at or ahead of the entry stage) are excluded from the %; a deal that reverted below where it entered, or is Dead, is a <b>Miss</b>. Closed Won / With Escrow / in Accounting Reconciliation all count as Won. Cohort = opps that <b>entered</b> the stage in the selected period (anchored on first entry). Widen the date range for fuller cohorts. Scoped to <b>{drillLabel}</b>.</div>
+        </>) : (<>
+          {stageConv.B.length ? (<div className="flex flex-col gap-3 pt-1">
+            {stageConv.B.map((s) => (
+              <div key={s.id} className="flex items-center gap-3">
+                <div className="text-[14px] flex-1 min-w-0 truncate" style={{ color: T.ink }}>{s.from} → {s.to} <span style={{ color: T.faint }}>({s.adv}/{s.base})</span></div>
+                <div className="hidden sm:block flex-1 h-3 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 260 }}><div style={{ width: `${Math.round((s.rate || 0) * 100)}%`, height: "100%", background: T.chart[1] }} /></div>
+                <div className="text-[18px] font-bold text-right shrink-0" style={{ width: 64, fontVariantNumeric: "tabular-nums", color: T.ink }}>{s.rate == null ? "—" : Math.round(s.rate * 100) + "%"}</div>
+              </div>))}
+          </div>) : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No opps entered these stages in the selected period for this scope.</div>}
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Of opps that reached each stage, the share that <b>ever reached the next core stage</b> (advancing or beyond) — the step-by-step probability of moving down the funnel. Anchored on entries in the selected period. Scoped to <b>{drillLabel}</b>.</div>
+        </>)}
       </Panel>
       {(() => { const maxAdv = Math.max(0.0001, ...stageFlowData.map((s) => s.advPct || 0));
         const anyFlow = stageFlowData.some((s) => s.entered || s.left);
@@ -2515,6 +2538,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r12 (Buyer ARIP skip assumption + flip toggle + rename)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r14 (toggle → front-end only)</p>
   </>);
 }
