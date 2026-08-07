@@ -1918,9 +1918,12 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   // deal contributes to one transition and not another depending on which stage dates it has. Transitions
   // with no data anywhere in scope are dropped so the table stays tight.
   const txStageMatrix = useMemo(() => {
-    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
+    const scoped = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir); // org gate only, no period
+    const rows = scoped.filter((r) => inClose(r.closeDate)); // period-filtered — drives values/counts
     const ORDER = ["Assignment", "Novation", "Fix & Flip"];
-    const types = [...new Set(rows.map((r) => String(r.txType || "").trim()).filter(Boolean))]
+    // Columns come from every transaction type this scope has (period-independent), so a type with no closes
+    // in the selected period still shows its column (all "—") instead of silently disappearing.
+    const types = [...new Set(scoped.map((r) => String(r.txType || "").trim()).filter(Boolean))]
       .sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b); });
     const cell = (subset, m) => { const vals = subset.map((r) => daysBetween(r[m.from], r[m.to])).filter((n) => n != null);
       return { median: vals.length ? median(vals) : null, avg: vals.length ? mean(vals) : null, n: vals.length }; };
@@ -1934,9 +1937,10 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   // credited to every rep who touched it (owner/VP, AM, AM2, follow-up) — matching the leaderboard/scorecard —
   // so a rep's median is over the deals they were on. Reps restricted to the current directory scope.
   const txStageByRep = useMemo(() => {
-    const rows = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir).filter((r) => inClose(r.closeDate));
+    const scoped = applyFilters(store.tx_duration || [], DATASETS.tx_duration, org, null, dir);
+    const rows = scoped.filter((r) => inClose(r.closeDate));
     const ORDER = ["Assignment", "Novation", "Fix & Flip"];
-    const types = [...new Set(rows.map((r) => String(r.txType || "").trim()).filter(Boolean))]
+    const types = [...new Set(scoped.map((r) => String(r.txType || "").trim()).filter(Boolean))]
       .sort((a, b) => { const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b); });
     const RF = DATASETS.tx_duration.repFields; // owner/VP + AM + AM2 + follow-up
     const scope = repsInScope(dir, org);
@@ -2562,6 +2566,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r22 (stage-history reads split entry/exit reports + dedupe · trim-ready)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r23 (restore period-independent tx-type columns)</p>
   </>);
 }
