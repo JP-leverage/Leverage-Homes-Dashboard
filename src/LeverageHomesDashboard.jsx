@@ -2518,15 +2518,27 @@ function LoadingScreen({ progress }) {
     </div>);
 }
 
+// Embed mode — a headless-screenshot target for the hourly Slack ping. `?view=stl-embed`
+// renders only the Speed-to-Lead hero cards on a plain background at fixed width, period pinned
+// via `&period=` (default today), with no nav / filters / notes / footer. Generic on purpose:
+// any other tile can get its own embed later by adding a branch here and in the embed return.
+function readEmbed() {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  if (p.get("view") !== "stl-embed") return null;
+  return { tile: "stl", period: p.get("period") || "today" };
+}
+
 export default function App() {
+  const embed = readEmbed();
   const [st, setSt] = useState({ loading: true, error: null, store: null, dir: null, diagnostics: [], mode: "mock", progress: { done: 0, total: 0, label: "" } });
   const [org, setOrg] = useState({ company: "All", department: "All", team: "All", role: "All", rep: "All" });
   const [view, setView] = useState("sales");
-  const [mode, setMode] = useState(() => (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
+  const [mode, setMode] = useState(() => embed ? "light" : ((typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light"));
   T = THEMES[mode];
   const [density, setDensity] = useState("comfortable");
   D = DENSITIES[density] || DENSITIES.comfortable;
-  const [date, setDate] = useState({ preset: "this_month", start: "2026-01-01", end: iso(new Date()) });
+  const [date, setDate] = useState({ preset: embed ? embed.period : "this_month", start: "2026-01-01", end: iso(new Date()) });
   const range = useMemo(() => resolveRange(date.preset, date, new Date()), [date]);
   const rangeFwd = useMemo(() => resolveRange(date.preset, date, new Date(), true), [date]); // pipeline forecast spans the full selected period (deals close in the future)
 
@@ -2554,6 +2566,18 @@ export default function App() {
         <ThemeToggle mode={mode} setMode={setMode} /></div></div>
     <div className="p-3 sm:p-6 max-w-[1200px] mx-auto" style={{ overflowX: "clip" }}>{body}</div></div>);
 
+  // Bare screenshot surface: no chrome, fixed width, plain canvas background. Puppeteer waits for
+  // #stl-embed-ready to appear (data loaded) then captures #stl-embed-root.
+  if (embed) return (
+    <div id="stl-embed-root" style={{ width: 1200, background: T.canvas, ...FONT, padding: 24, boxSizing: "border-box" }}>
+      {st.loading
+        ? <div id="stl-embed-loading" style={{ height: 220 }} />
+        : st.error
+          ? <div id="stl-embed-error" style={{ color: T.bad, fontSize: 13 }}>{st.error}</div>
+          : <div id="stl-embed-ready">{embed.tile === "stl" && <SpeedToLeadView store={st.store} range={range} />}</div>}
+    </div>
+  );
+
   if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
   if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
     <div className="font-semibold mb-1" style={{ color: T.warn }}>Couldn’t load Google Sheets</div><div style={{ color: T.sub }}>{st.error}</div>
@@ -2566,6 +2590,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-05 · v2-features-r23 (restore period-independent tx-type columns)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-10 · v2-features-r24 (stl-embed screenshot mode for hourly Slack ping)</p>
   </>);
 }
