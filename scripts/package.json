@@ -1,0 +1,9 @@
+{
+  "name": "stl-slack-ping",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  }
+}
