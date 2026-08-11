@@ -1358,9 +1358,9 @@ function SpeedToLeadView({ store, range }) {
     <div className="flex flex-col gap-5">
       {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
         <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
-      <StlHero big target={stlGoal} title="Speed to Lead — Blended" caption="Median time from lead in → claimed · all leads, all windows & channels" rows={rows} />
+      <StlHero big target={stlGoal} title="Speed to Lead — Accountable Window" caption="Median time from lead in → claimed · weekdays 10am–7pm, the scored window" rows={b("primary")} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <StlHero title="Accountable Window" caption="Weekdays 10am–7pm — the scored window" rows={b("primary")} />
+        <StlHero title="Blended" caption="All leads, all windows & channels — context, not scored" rows={rows} />
         <StlHero title="Out of Window" caption="Weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
         <StlHero title="Weekend" caption="Saturday & Sunday — context, not scored" rows={b("weekend")} />
       </div>
@@ -2590,6 +2590,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-10 · v2-features-r24 (stl-embed screenshot mode for hourly Slack ping)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-11 · v2-features-r25 (STL: Accountable Window promoted to headline hero + breakout; Blended demoted to context card)</p>
   </>);
 }
