@@ -562,13 +562,19 @@ function tagApptRoles(store, dir) {
   const isLP = (name) => { const n = String(name || "").trim(); return !!n && lps.some((r) => nameMatch(n, r)); };
   ["appointments", "appointments_attended", "appts_seg"].forEach((k) => { (store[k] || []).forEach((r) => { r.lpAssigned = isLP(r.rep); }); });
 }
+// Synthetic Team option: a role-union of Acquisition Managers + Follow-Up Specialists across every real team.
+// It isn't a directory team — repsInScope and orgOptions expand it to "role matches AM or Follow-Up" instead
+// of matching p.team, so all rep-scoped KPIs, tables, and the rep dropdown restrict to those two roles.
+const TEAM_AMFU = "AMs + Follow-Up Specialists";
+const isAmFuRole = (role) => /acqu|follow.?up/i.test(String(role || ""));
+const teamMatches = (p, orgTeam) => orgTeam === "All" || (orgTeam === TEAM_AMFU ? isAmFuRole(p.role) : p.team === orgTeam);
 function repsInScope(dir, org) {
   const noOrgFilter = org.company === "All" && org.department === "All" && org.team === "All" && org.role === "All" && org.rep === "All";
   if (noOrgFilter) return null;
   if (!dir.people.length) return org.rep !== "All" ? new Set([String(org.rep).trim()]) : null;
   const matched = dir.people.filter((p) =>
     (org.company === "All" || p.company === org.company) && (org.department === "All" || p.department === org.department) &&
-    (org.team === "All" || p.team === org.team) && (org.role === "All" || p.role === org.role) &&
+    teamMatches(p, org.team) && (org.role === "All" || p.role === org.role) &&
     (org.rep === "All" || p.rep === org.rep));
   return new Set(matched.map((p) => String(p.rep).trim()));
 }
@@ -1117,11 +1123,14 @@ function orgOptions(dir, org) {
   const people = dir.people || [];
   if (!people.length) return dir.options;
   const uniq = (arr, f) => [...new Set(arr.map(f).filter(Boolean))].sort();
-  const match = (p, keys) => keys.every((k) => org[k] === "All" || p[k] === org[k]);
+  const match = (p, keys) => keys.every((k) => k === "team" ? teamMatches(p, org.team) : (org[k] === "All" || p[k] === org[k]));
+  const teamPool = people.filter((p) => match(p, ["company", "department"]));
+  const teams = uniq(teamPool, (p) => p.team);
+  if (teamPool.some((p) => isAmFuRole(p.role))) teams.push(TEAM_AMFU); // role-union option, listed after real teams
   return {
     company: uniq(people, (p) => p.company),
     department: uniq(people.filter((p) => match(p, ["company"])), (p) => p.department),
-    team: uniq(people.filter((p) => match(p, ["company", "department"])), (p) => p.team),
+    team: teams,
     role: uniq(people.filter((p) => match(p, ["company", "department", "team"])), (p) => p.role),
     rep: uniq(people.filter((p) => match(p, ["company", "department", "team", "role"])), (p) => p.rep),
   };
@@ -2641,6 +2650,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r27 (Transactions flow tiles: front-end/back-end record-type toggles; Buyer ARIP now imputes UC-skippers)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r28 (Team filter: added "AMs + Follow-Up Specialists" role-union option)</p>
   </>);
 }
