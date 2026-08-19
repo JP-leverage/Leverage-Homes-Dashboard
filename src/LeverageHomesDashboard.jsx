@@ -950,7 +950,7 @@ const KPIS = {
     targetKey: "rev_to_buyer_arip", targetType: "revenue",
     qualify: (r) => String(r.newValue ?? "").trim() === "Buyer ARIP",
     agg: (rows) => dedupeLatest(rows, "id", "date").reduce((s, r) => s + num(r.forecast), 0),
-    subStat: (rows) => { const n = dedupeLatest(rows.filter((r) => String(r.newValue ?? "").trim() === "Buyer ARIP"), "id", "date").length; return `${n.toLocaleString()} ${n === 1 ? "opp" : "opps"} moved in · latest entry per opp`; } },
+    subStat: (rows) => { const dd = dedupeLatest(rows.filter((r) => String(r.newValue ?? "").trim() === "Buyer ARIP"), "id", "date"); const imp = dd.filter((r) => r.__imputed).length; return `${dd.length.toLocaleString()} ${dd.length === 1 ? "opp" : "opps"} moved in${imp ? ` · ${imp} skipped via UC` : ""}`; } },
   rev_to_under_contract: { id: "rev_to_under_contract", label: "Forecasted Rev → Under Contract", dataset: "stage_history", format: "currency", higherIsBetter: true, txOnly: true, breakoutRep: "acqManager",
     targetKey: "rev_to_under_contract", targetType: "revenue",
     qualify: (r) => String(r.newValue ?? "").trim() === "Under Contract",
@@ -1385,6 +1385,11 @@ const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
   leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
+// The two "revenue moved into stage" tiles on the Transactions tab. Rendered in their own strip with the
+// record-type toggles (front-end / back-end) that filter only these two, and fed skip-imputed Buyer ARIP rows.
+const TX_FLOW_TILES = ["rev_to_buyer_arip", "rev_to_under_contract"];
+const isFrontEndRT = (r) => /front.?end/i.test(String(r.recordType ?? ""));
+const isBackEndRT = (r) => /back.?end/i.test(String(r.recordType ?? ""));
 function CardGrid({ ids, results, breakouts, sparks, big }) {
   const min = big ? D.minBig : D.min;
   return <div className="grid" style={{ gap: D.gridGap, gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} big={big} />)}</div>;
@@ -1658,6 +1663,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
   const [txStageMetric, setTxStageMetric] = useState("arip_close"); // which stage transition the per-rep table shows
   const [txExclFlips, setTxExclFlips] = useState(false); // Transactions stage panels: pull out front/back-end + Fix & Flip
+  const [txRmFront, setTxRmFront] = useState(false); // TX flow tiles: drop Purchase ~ Front-End record type
+  const [txRmBack, setTxRmBack] = useState(false);   // TX flow tiles: drop Purchase ~ Back-End record type
   const [stageLens, setStageLens] = useState("close"); // merged stage panel: "close" (resolved rate) | "advance"
   const [txTimeTab, setTxTimeTab] = useState("aripclose"); // merged timing panel: "aripclose" | "bystage" | "byrep"
   const [apptTab, setApptTab] = useState("showrate"); // merged Sales appointments panel: showrate | funnel | outcomes | breakout
@@ -1682,7 +1689,23 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
-  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], store, dir, org, KPIS[id].forwardDate ? rangeFwd : range, rangeFwd)])), [store, dir, org, range, rangeFwd]);
+  // Rows feeding the two "revenue moved into stage" tiles. Apply the front-/back-end record-type toggles,
+  // then for Buyer ARIP impute an entry for every opp that reached Under Contract WITHOUT ever logging a
+  // Buyer ARIP transition (front-end purchases legitimately skip it; wholesale skips are usually stage-hygiene)
+  // — the imputed row carries the opp's UC date + forecast so it lands in the same window and counts once
+  // (dedupeLatest collapses any multi-UC opp). UC tile gets the plain record-type-filtered rows.
+  const txStageRows = useMemo(() => {
+    const uc = (store.stage_history || []).filter((r) => !(txRmFront && isFrontEndRT(r)) && !(txRmBack && isBackEndRT(r)));
+    const nvById = {};
+    uc.forEach((r) => { const id = r.id; if (id) (nvById[id] = nvById[id] || new Set()).add(String(r.newValue ?? "").trim()); });
+    const imputed = [];
+    uc.forEach((r) => { if (String(r.newValue ?? "").trim() !== "Under Contract") return; const id = r.id;
+      if (id && nvById[id] && !nvById[id].has("Buyer ARIP")) imputed.push({ ...r, newValue: "Buyer ARIP", __imputed: true }); });
+    return { uc, ba: uc.concat(imputed) };
+  }, [store, txRmFront, txRmBack]);
+  const storeFor = (id) => id === "rev_to_buyer_arip" ? { ...store, stage_history: txStageRows.ba }
+    : id === "rev_to_under_contract" ? { ...store, stage_history: txStageRows.uc } : store;
+  const results = useMemo(() => Object.fromEntries(allCards.map((id) => [id, computeKpi(KPIS[id], storeFor(id), dir, org, KPIS[id].forwardDate ? rangeFwd : range, rangeFwd)])), [store, dir, org, range, rangeFwd, txStageRows]);
   const teamOf = (rep) => dir.byRep[String(rep ?? "").trim()]?.team || null;
   const breakouts = useMemo(() => {
     const out = {};
@@ -1793,14 +1816,15 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset];
       if (!kpi.agg || ds.companyScope || !ds.dateField) { out[id] = null; return; }
-      const rows = applyFilters(store[kpi.dataset] || [], ds, org, null, dir);
+      const src0 = id === "rev_to_buyer_arip" ? txStageRows.ba : id === "rev_to_under_contract" ? txStageRows.uc : (store[kpi.dataset] || []);
+      const rows = applyFilters(src0, ds, org, null, dir);
       const src = kpi.qualify ? rows.filter(kpi.qualify) : rows;
       const m = {}; src.forEach((r) => { const k = monthKey(r[ds.dateField]); if (k) (m[k] = m[k] || []).push(r); });
       const series = Object.entries(m).sort().map(([label, rs]) => ({ label, value: kpi.agg(rs) })).slice(-12); // trailing 12 mo, preset-independent
       out[id] = series.length >= 2 ? series : null;
     });
     return out;
-  }, [cards, store, org, dir]);
+  }, [cards, store, org, dir, txStageRows]);
   // Month-over-month direction from the trailing spark series (last point vs the one before).
   const trendOf = (id) => { const s = sparks[id]; if (!s || s.length < 2) return null;
     const a = s[s.length - 2].value, b = s[s.length - 1].value; return b > a ? 1 : b < a ? -1 : 0; };
@@ -2147,6 +2171,19 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <div className="text-[11px] mt-3" style={{ color: T.faint }}>Two funnel conversions per rep. <b>Attended → ARIP</b> = the rep's ARIPs ÷ their attended appointments — how well they turn a met appointment into a signed contract. <b>ARIP → Closed</b> = deals closed ÷ ARIPs — how many signed deals actually close. Appointments are credited by role: <b>VPs</b> for appointments they <b>attended</b>, <b>AMs &amp; Follow-Ups</b> for appointments they <b>set</b>. Each count falls within the selected date range — <b>read this on This Quarter / This Year</b>; a one-month window is too thin to be meaningful. Scoped to <b>{drillLabel}</b>.</div>
           </Panel>);
       })()}
+    </>) : isTxView ? (<>
+      <CardGrid ids={cards.filter((id) => !TX_FLOW_TILES.includes(id))} results={results} breakouts={breakouts} sparks={sparks} />
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3 flex-wrap px-1">
+          <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Revenue moved into stage · record-type filters</span>
+          <div className="flex gap-2">
+            {[["Remove front-end", txRmFront, setTxRmFront], ["Remove back-end", txRmBack, setTxRmBack]].map(([label, on, set]) => (
+              <button key={label} onClick={() => set((v) => !v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+                style={{ background: on ? T.accentSoft : "transparent", color: on ? T.accent : T.sub, border: `1px solid ${on ? T.accent : T.border}` }}>{label}</button>))}
+          </div>
+        </div>
+        <CardGrid ids={TX_FLOW_TILES} results={results} breakouts={breakouts} sparks={sparks} />
+      </div>
     </>) : (
       <CardGrid ids={cards} results={results} breakouts={breakouts} sparks={sparks} />
     )}
@@ -2604,6 +2641,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r26 (Transactions: added Forecasted Rev → Buyer ARIP and → Under Contract tiles off stage-history, dedupeLatest per opp; reconciled panel UC-forecast stat to the same column-based source)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r27 (Transactions flow tiles: front-end/back-end record-type toggles; Buyer ARIP now imputes UC-skippers)</p>
   </>);
 }
