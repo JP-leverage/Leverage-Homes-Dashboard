@@ -164,7 +164,7 @@ const DATASETS = {
     workbook: "transactions",
     require: ["Opportunity ID", "New Value", "Stage", "Edit Date"], exclude: [], tabInclude: /Stage History/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", recordType: "Opportunity Record Type", txType: "Transaction Type",
-      oldValue: "Old Value", newValue: "New Value", stage: "Stage",
+      oldValue: "Old Value", newValue: "New Value", stage: "Stage", forecast: "Total Forecasted Revenue",
       owner: "Opportunity Owner", acqManager: "Acquisition Manager", acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist" },
     dedupe: (r) => [r.id, r.oldValue, r.newValue, r.date].join("|"), dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
@@ -942,6 +942,20 @@ const KPIS = {
     targetKey: "rev_out_of_arip", targetType: "revenue", breakoutRep: "acqManager",
     qualify: (r) => isAripOut(r.newValue),
     agg: (rows) => rows.reduce((s, r) => s + num(r.projNet), 0) },
+  // Forecasted revenue that MOVED INTO a stage in the window, dated by Edit Date (the stage-change event).
+  // Source: Opportunity Stage History (transactions wb) — qualify to the target New Value, then dedupeLatest
+  // by Opportunity ID so an opp that re-enters the stage counts once at its latest entry, and sum the opp's
+  // current Total Forecasted Revenue. Transactions tab only (txOnly).
+  rev_to_buyer_arip: { id: "rev_to_buyer_arip", label: "Forecasted Rev → Buyer ARIP", dataset: "stage_history", format: "currency", higherIsBetter: true, txOnly: true, breakoutRep: "acqManager",
+    targetKey: "rev_to_buyer_arip", targetType: "revenue",
+    qualify: (r) => String(r.newValue ?? "").trim() === "Buyer ARIP",
+    agg: (rows) => dedupeLatest(rows, "id", "date").reduce((s, r) => s + num(r.forecast), 0),
+    subStat: (rows) => { const n = dedupeLatest(rows.filter((r) => String(r.newValue ?? "").trim() === "Buyer ARIP"), "id", "date").length; return `${n.toLocaleString()} ${n === 1 ? "opp" : "opps"} moved in · latest entry per opp`; } },
+  rev_to_under_contract: { id: "rev_to_under_contract", label: "Forecasted Rev → Under Contract", dataset: "stage_history", format: "currency", higherIsBetter: true, txOnly: true, breakoutRep: "acqManager",
+    targetKey: "rev_to_under_contract", targetType: "revenue",
+    qualify: (r) => String(r.newValue ?? "").trim() === "Under Contract",
+    agg: (rows) => dedupeLatest(rows, "id", "date").reduce((s, r) => s + num(r.forecast), 0),
+    subStat: (rows) => { const n = dedupeLatest(rows.filter((r) => String(r.newValue ?? "").trim() === "Under Contract"), "id", "date").length; return `${n.toLocaleString()} ${n === 1 ? "opp" : "opps"} moved in · latest entry per opp`; } },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.subject).trim().toLowerCase() === "contract sent", agg: (rows) => rows.length },
   appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true,
@@ -1653,11 +1667,12 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
   const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
-  const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip"]
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
         if (KPIS[id].domain === "marketing") return false;
+        if (KPIS[id].txOnly) return false; // Transactions-tab-only tiles
         if (KPIS[id].vpOnly && !showVpMetrics) return false; // VP-only metrics: shown at company level + VP scope only
         if (KPIS[id].amFuOnly && !showAmFuMetrics) return false; // AM/Follow-Up-only metrics
         return true;
@@ -1979,17 +1994,16 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   // from the stage-history (skip toggle respected); forecast $ is joined by Opportunity Name from the pipeline
   // forecast tab, falling back to closed-opp forecast. Deals not present in either forecast source contribute $0.
   const ucForecast = useMemo(() => {
-    const fmap = {};
-    (store.pipeline || []).forEach((r) => { const nm = String(r.name ?? "").trim(); if (nm && !(nm in fmap)) fmap[nm] = num(r.forecast); });
-    (store.closed_opps || []).forEach((r) => { const nm = String(r.name ?? "").trim(); if (nm && !(nm in fmap)) fmap[nm] = num(r.revenue); });
+    // Same source + logic as the "Forecasted Rev → Under Contract" tile: stage-history rows whose New Value
+    // is Under Contract, dated by Edit Date within the window, deduped to the latest entry per opp, summing
+    // the Total Forecasted Revenue column. (This panel additionally respects the front-end toggle, so at
+    // "Exclude front-end" it can read below the tile, which always shows all record types.)
     const all = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
-    const rows = txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all;
+    const rows = (txExclFlips ? all.filter((r) => !isExcludedRecord(r)) : all)
+      .filter((r) => String(r.newValue ?? "").trim() === "Under Contract");
     const inR = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
-    const seen = new Set(); let total = 0, n = 0;
-    rows.forEach((r) => { if (String(r.newValue ?? "").trim() !== "Under Contract" || !inR(r.date)) return;
-      const id = r.id; if (id && seen.has(id)) return; if (id) seen.add(id);
-      total += fmap[String(r.name ?? "").trim()] || 0; n++; });
-    return { total, n };
+    const dd = dedupeLatest(rows.filter((r) => inR(r.date)), "id", "date");
+    return { total: dd.reduce((s, r) => s + num(r.forecast), 0), n: dd.length };
   }, [store, org, range, dir, txExclFlips]);
   // Revenue attributed to each VP, two ways: per assigned opp and per appointment. All from already-loaded
   // datasets. Opps assigned + closed revenue carry Opportunity Owner (the VP) directly; appointments are
@@ -2590,6 +2604,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-11 · v2-features-r25 (STL: Accountable Window promoted to headline hero + breakout; Blended demoted to context card)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r26 (Transactions: added Forecasted Rev → Buyer ARIP and → Under Contract tiles off stage-history, dedupeLatest per opp; reconciled panel UC-forecast stat to the same column-based source)</p>
   </>);
 }
