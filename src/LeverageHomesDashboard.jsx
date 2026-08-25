@@ -1426,12 +1426,15 @@ function StlHero({ title, caption, rows, big, target }) {
       </div>)}
     </div>);
 }
-function SpeedToLeadView({ store, range }) {
+function SpeedToLeadView({ store, range, dir }) {
   const rows = useMemo(() => stlRows(store, range), [store, range]);
   const stlGoal = useMemo(() => { const t = (store.targets || []).find((x) => x.kpiId === "speed_to_lead" && x.scope === "Company"); const v = t ? num(t.value) : 0; return v > 0 ? v * 60 : null; }, [store]); // sheet value is minutes → seconds
   const b = (name) => rows.filter((r) => r.bucket === name);
   const noTime = rows.noTime || {};
   const noTimeMsg = Object.entries(noTime).filter(([, n]) => n > 0).map(([s, n]) => `${s} (${n})`).join(", ");
+  // Avg talk time per inbound channel — company-wide (SToL hides Team/Rep), dated by the call's Created Date.
+  const talk = useMemo(() => computeKpi(KPIS.avg_talk_time_channel, store, dir, ALL_ORG, range, range), [store, dir, range]);
+  const talkBreak = useMemo(() => { const it = KPIS.avg_talk_time_channel.customBreakout(talk.rows || []).filter((x) => x.value > 0); return it.length ? { items: it, custom: true } : null; }, [talk]);
   return (
     <div className="flex flex-col gap-5">
       {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
@@ -1442,12 +1445,18 @@ function SpeedToLeadView({ store, range }) {
         <StlHero title="Out of Window" caption="Weekdays outside 10am–7pm — context, not scored" rows={b("outwindow")} />
         <StlHero title="Weekend" caption="Saturday & Sunday — context, not scored" rows={b("weekend")} />
       </div>
+      <div>
+        <SubHead label="Inbound talk time" note="avg call duration by channel · dated by the call's Created Date · company-wide" />
+        <div className="mt-3" style={{ maxWidth: 460 }}>
+          <KpiCard kpi={KPIS.avg_talk_time_channel} result={talk} breakout={talkBreak} spark={null} />
+        </div>
+      </div>
     </div>);
 }
 
 const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
-  leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "avg_talk_time_channel", "qcs"],
+  leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
 };
 // The two "revenue moved into stage" tiles on the Transactions tab. Rendered in their own strip with the
 // record-type toggles (front-end / back-end) that filter only these two, and fed skip-imputed Buyer ARIP rows.
@@ -1588,6 +1597,18 @@ function OutcomeDonutCard({ title, tally, big }) {
       </div>
     </div>) : <span className="text-[11px]" style={{ color: T.faint }}>No appointments in scope</span>}
   </div>);
+}
+// Horizontal bars of avg ICP per group (appointment type / subject). Bars scale to the group max so
+// differences read clearly; each row shows the average (0–7) and the appointment count.
+function AvgIcpBars({ items }) {
+  if (!items || !items.length) return <div className="text-[12px]" style={{ color: T.faint }}>No scored appointments in scope.</div>;
+  const max = Math.max(1, ...items.map((i) => i.value));
+  return (<div className="flex flex-col gap-2">{items.map((o) => (
+    <div key={o.label} className="flex items-center gap-3">
+      <div className="text-[12px] shrink-0 truncate" style={{ width: 176, color: T.sub }} title={o.label}>{o.label} <span style={{ color: T.faint }}>({o.n})</span></div>
+      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round((o.value / max) * 100)}%`, height: "100%", background: T.accent }} /></div>
+      <div className="text-[12px] text-right shrink-0" style={{ width: 40, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.value.toFixed(1)}</div>
+    </div>))}</div>);
 }
 function ApptOutcomeBreakout({ groups }) {
   const anyGroup = groups.am + groups.vp + groups.lp;
@@ -1738,7 +1759,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
   const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "avg_talk_time_channel", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
@@ -1750,7 +1771,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       });
   const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
   const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
-  const CALL_IDS = ["calls", "talk_time", "avg_talk_time_channel", "qcs"];
+  const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
   // Rows feeding the two "revenue moved into stage" tiles. Apply the front-/back-end record-type toggles,
@@ -1977,7 +1998,19 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const total = rows.length || 1;
     return { total: rows.length, items: Object.entries(m).map(([label, count]) => ({ label, count, pct: count / total })).sort((a, b) => b.count - a.count) };
   }, [store, org, range, dir]);
-  const mktLeadsBySource  = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.source), [store, org, range, dir]);
+  // Avg ICP of appointments SET, broken out by appointment type (Event Type) and by subject. Scoped by
+  // org + period (Created Date) like the tile; only appts carrying a numeric ISA ICP count. Subjects are
+  // normalized (trailing " - Name" stripped) so near-duplicates collapse into real consultation types.
+  const apptIcp = useMemo(() => {
+    const rows = applyFilters(store.appointments || [], DATASETS.appointments, org, range, dir)
+      .filter((r) => r.icp != null && r.icp !== "" && !isNaN(Number(r.icp)));
+    const grp = (keyFn) => { const m = {}; rows.forEach((r) => { const k = keyFn(r); (m[k] = m[k] || []).push(Number(r.icp)); });
+      return Object.entries(m).map(([label, arr]) => ({ label, value: mean(arr), n: arr.length })).sort((a, b) => b.n - a.n); };
+    const normSub = (s) => { const x = String(s ?? "").trim().replace(/\s*-\s*[^-]+$/, ""); return x || "(unspecified)"; };
+    return { byType: grp((r) => String(r.eventType ?? "").trim() || "(unspecified)"),
+      bySubject: grp((r) => normSub(r.subject)).slice(0, 8),
+      overall: rows.length ? mean(rows.map((r) => Number(r.icp))) : null, n: rows.length };
+  }, [store, org, range, dir]);
   const mktLeadsBySegment = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.segment), [store, org, range, dir]);
   const mktOppsBySource   = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
@@ -2153,7 +2186,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const mktClosedByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => isClosedStage(o.stage) && inClose(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, range, dir]);
 
-  if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} />;
+  if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} dir={dir} />;
   const lpName = lpScopeName(dir, org); // single Listing Partner selected → swap to their card set
   if (lpName) return <ListingPartnerView store={store} dir={dir} range={range} lp={lpName} />;
 
@@ -2534,8 +2567,20 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
             <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(o.pct * 100)}%`, height: "100%", background: /met/i.test(o.label) ? T.good : /no show|missed/i.test(o.label) ? T.bad : T.chart[3] }} /></div>
             <div className="text-[12px] text-right shrink-0" style={{ width: 110, fontVariantNumeric: "tabular-nums", color: T.ink }}>{o.count.toLocaleString()} · {(o.pct * 100).toFixed(1)}%</div>
           </div>))}</div>
-      </>) : (
+      </>) : (<div className="flex flex-col gap-4">
+        <SubHead label="Avg ICP per appointment set" note={`ISA ICP Total Score · scored appts · Created Date in period${apptIcp.overall != null ? ` · overall ${apptIcp.overall.toFixed(1)}` : ""}`} />
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+          <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+            <span className="text-[12px] font-medium" style={{ color: T.sub }}>By appointment type</span>
+            <AvgIcpBars items={apptIcp.byType} />
+          </div>
+          <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+            <span className="text-[12px] font-medium" style={{ color: T.sub }}>By subject</span>
+            <AvgIcpBars items={apptIcp.bySubject} />
+          </div>
+        </div>
         <ApptRoleSection store={store} dir={dir} org={org} range={range} part="breakout" />
+      </div>
       )}
     </Panel>
     {(
@@ -2705,6 +2750,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r29 (Sales: Avg ICP/appt + Avg Talk Time/inbound channel; team-sectioned tile breakouts; dramatic sparklines)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r31 (Moved Avg Talk Time / inbound channel from Sales to the Speed to Lead tab)</p>
   </>);
 }
