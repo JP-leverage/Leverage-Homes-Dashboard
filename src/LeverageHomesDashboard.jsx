@@ -198,7 +198,8 @@ const DATASETS = {
     workbook: "activities",
     require: ["Appointment Outcome", "Start"], exclude: [], tabInclude: /Segment x Source/i,
     schema: { name: "Opportunity Name", subject: "Subject", createdBy: "Created By", rep: "Assigned",
-      outcome: "Appointment Outcome", eventType: "Event Type" },
+      outcome: "Appointment Outcome", eventType: "Event Type",
+      icp: ["ISA ICP Total Score", "Total ICP Score", "ICP Total Score", "Total Tier 1 ICP", "ISA ICP", "ICP Score", "ICP"] },
     dedupe: null, dateField: "date", dateCandidates: ["Created Date", "Create Date"], repField: "createdBy",
   },
   // Appointments ATTENDED / Show Rate — dated by Start (when the appointment actually occurred).
@@ -257,6 +258,17 @@ const DATASETS = {
     schema: { account: "Company / Account", subject: "Subject", rep: "Assigned", status: "Status", task: "Task",
       durationMin: "smrtPhone Call Duration (Minutes)", qc: "smrtPhone QC Y/N" },
     dedupe: null, dateField: "date", dateCandidates: ["Date", "Created Date", "Create Date", "Completed Date"], repField: "rep",
+  },
+  // Avg talk time per INBOUND CHANNEL — "Average Talk Time Per Inbound x YTD" tab in the Speed to Lead
+  // workbook. One row per call (task), carrying its duration, the lead's inbound channel (Lead Source),
+  // and the call's own Created Date (dated on "Created Date Task" per spec). repField = Assigned rep so the
+  // tile still honors Team/Rep scope; the channel split is a custom breakout on the KPI (not rep-based).
+  talk_time_channel: {
+    workbook: "speed_to_lead",
+    require: ["smrtPhone Call Duration (Minutes)", "Lead Source"], exclude: [], tabInclude: /Average Talk Time Per Inbound/i,
+    schema: { rep: "Assigned To: Full Name", subject: "Subject", account: "Company",
+      durationMin: "smrtPhone Call Duration (Minutes)", source: "Lead Source" },
+    dedupe: null, dateField: "date", dateCandidates: ["Created Date Task", "Created Date", "Create Date"], repField: "rep",
   },
   opps_assigned: {
     workbook: "opportunities_pt2",
@@ -919,6 +931,13 @@ const apptExcluded = (o) => /cancel|reschedul/i.test(String(o ?? ""));
 const apptAttended = (o) => { const s = String(o ?? "").trim().toLowerCase();
   if (/no show|missed/.test(s)) return false;
   return /appointment met/.test(s) || s === "met"; };
+// Normalize a raw Lead Source into one of the three inbound channels for the talk-time tile.
+// Directory of raw values seen in the sync: "Direct Mail Campaign", "Pay Per Lead", "Website".
+const inboundChannel = (s) => { const x = String(s ?? "").toLowerCase();
+  if (/direct\s*mail/.test(x)) return "Direct Mail";
+  if (/pay\s*per\s*lead|\bppl\b/.test(x)) return "Pay Per Lead";
+  if (/web\s*site|website/.test(x)) return "Website";
+  return "Other"; };
 const KPIS = {
   closed_revenue: { id: "closed_revenue", label: "Closed Revenue", dataset: "closed_opps", format: "currency", breakoutRep: "acqManager",
     targetKey: "closed_revenue", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, o) => s + num(o.revenue), 0) },
@@ -934,6 +953,12 @@ const KPIS = {
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
+  // Avg ICP of appointments SET, averaged over appts that carry an ICP (blank/unsynced rows excluded so
+  // they don't drag it to 0). Breaks out per setter (Created By) via the standard rep-breakout path,
+  // team-sectioned on the All view. Reads 0 with a "not synced yet" note until the ICP column propagates.
+  avg_icp_per_appt: { id: "avg_icp_per_appt", label: "Avg ICP · Appt Set", dataset: "appointments", format: "decimal", higherIsBetter: true,
+    compute: (rows) => { const v = rows.filter((r) => r.icp != null && r.icp !== "" && !isNaN(Number(r.icp))).map((r) => Number(r.icp)); return v.length ? mean(v) : 0; },
+    subStat: (rows) => { const n = rows.filter((r) => r.icp != null && r.icp !== "" && !isNaN(Number(r.icp))).length; return n ? `${n.toLocaleString()} scored ${n === 1 ? "appt" : "appts"} · avg ICP` : "ICP column not synced yet"; } },
   opps_to_arip: { id: "opps_to_arip", label: "Opps → ARIP", dataset: "arip_entered", format: "number", higherIsBetter: true, breakoutRep: "acqManager", uniqueTotal: true,
     targetKey: "opps_to_arip", targetType: "volume",
     agg: (rows) => rows.length },
@@ -999,6 +1024,15 @@ const KPIS = {
     targetKey: "calls", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   talk_time: { id: "talk_time", label: "Total Talk Time", dataset: "calls", format: "minutes",
     targetKey: "talk_time", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.reduce((s, r) => s + num(r.durationMin), 0) },
+  // Avg talk time PER INBOUND CHANNEL. Headline = avg seconds/call across inbound calls (channel known);
+  // the breakout (always shown, not rep-based) is avg per Direct Mail / Pay Per Lead / Website. Honors
+  // Team/Rep scope via the dataset's Assigned repField. Dated by the call's Created Date (Created Date Task).
+  avg_talk_time_channel: { id: "avg_talk_time_channel", label: "Avg Talk Time · Inbound", dataset: "talk_time_channel", format: "duration", higherIsBetter: true,
+    compute: (rows) => { const v = rows.filter((r) => num(r.durationMin) > 0 && inboundChannel(r.source) !== "Other").map((r) => num(r.durationMin)); return v.length ? mean(v) * 60 : 0; },
+    customBreakout: (rows) => { const m = {}; rows.forEach((r) => { const n = num(r.durationMin); if (!(n > 0)) return; const c = inboundChannel(r.source); if (c === "Other") return; (m[c] = m[c] || []).push(n); });
+      const ORDER = ["Direct Mail", "Pay Per Lead", "Website"];
+      return Object.entries(m).map(([label, arr]) => ({ label, value: mean(arr) * 60 })).sort((a, b) => (ORDER.indexOf(a.label) + 1 || 9) - (ORDER.indexOf(b.label) + 1 || 9)); },
+    subStat: (rows) => { const n = rows.filter((r) => num(r.durationMin) > 0 && inboundChannel(r.source) !== "Other").length; return n ? `${n.toLocaleString()} inbound ${n === 1 ? "call" : "calls"} · avg per call` : "No inbound calls in scope"; } },
   qcs: { id: "qcs", label: "Total QCs", dataset: "calls", format: "number",
     targetKey: "qcs", targetType: "volume", higherIsBetter: true, qualify: isQC, agg: (rows) => rows.length,
     breakoutBy: (rows) => { const q = rows.filter(isQC); const c = (m) => q.filter((r) => num(r.durationMin) >= m).length; return [{ label: "3+ min", value: c(3) }, { label: "5+ min", value: c(5) }, { label: "10+ min", value: c(10) }]; } },
@@ -1051,6 +1085,7 @@ const fmt = (v, f) => { if (v == null || isNaN(v)) return "—";
   if (f === "currency") return (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
   if (f === "percent") return (v * 100).toFixed(1) + "%";
   if (f === "minutes") return Math.round(v).toLocaleString() + " min";
+  if (f === "duration") return fmtDur(v);
   if (f === "decimal") return (Math.round(v * 10) / 10).toFixed(1); return Math.round(v).toLocaleString(); };
 // Animated count-up for headline numbers. Interpolates the raw value and passes through fmt(), so
 // currency/percent/minutes all animate correctly. Respects prefers-reduced-motion and lands exactly
@@ -1187,16 +1222,36 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
           <input type="date" value={date.end} onChange={(e) => setDate({ ...date, end: e.target.value })} className="text-sm rounded-md px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card, colorScheme: T === THEMES.dark ? "dark" : "light" }} /></label></>)}
     </div></div>);
 }
+// Sparkline — deliberately literal + dramatic. Y is scaled to the data's OWN min..max (not anchored at 0),
+// with a little headroom, so real month-to-month swings read at full amplitude instead of a flat squiggle.
+// A gradient area sits under a thick line; every data point gets a marker and the latest point is emphasized.
+// Rendered with a uniform (meet) viewBox sized to the point count so the markers stay perfectly round.
 function Sparkline({ data, color }) {
+  const gid = useMemo(() => "spark_" + Math.random().toString(36).slice(2, 9), []);
   if (!data || data.length < 2) return null;
-  const vals = data.map((d) => d.value); const max = Math.max(...vals); const min = Math.min(...vals, 0);
-  const W = 100, H = 26, n = data.length;
+  const c = color || T.accent;
+  const vals = data.map((d) => d.value);
+  let max = Math.max(...vals), min = Math.min(...vals);
+  if (max === min) { max += 1; min -= 1; }                 // dead-flat series → gentle centered line
+  const pad = (max - min) * 0.14; max += pad; min -= pad;  // headroom so peaks/troughs don't clip the markers
+  const span = max - min;
+  const n = data.length, W = Math.max(60, (n - 1) * 22), H = 44, mY = 5;
   const x = (i) => (i / (n - 1)) * W;
-  const y = (v) => max === min ? H / 2 : H - (((v - min) / (max - min)) * (H - 4) + 2);
-  const line = data.map((d, i) => `${x(i).toFixed(1)},${y(d.value).toFixed(1)}`).join(" ");
-  return (<svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 26, display: "block" }}>
-    <polyline points={`0,${H} ${line} ${W},${H}`} fill={color || T.accent} fillOpacity="0.12" stroke="none" />
-    <polyline points={line} fill="none" stroke={color || T.accent} strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+  const y = (v) => H - mY - ((v - min) / span) * (H - mY * 2);
+  const pts = data.map((d, i) => [x(i), y(d.value)]);
+  const line = pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const last = pts[n - 1];
+  return (<svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: H, display: "block", overflow: "visible" }}>
+    <defs>
+      <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={c} stopOpacity="0.36" />
+        <stop offset="100%" stopColor={c} stopOpacity="0" />
+      </linearGradient>
+    </defs>
+    <polyline points={`0,${H} ${line} ${W},${H}`} fill={`url(#${gid})`} stroke="none" />
+    <polyline points={line} fill="none" stroke={c} strokeWidth="2.4" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+    {pts.map((p, i) => i < n - 1 && <circle key={i} cx={p[0]} cy={p[1]} r="1.6" fill={T.card} stroke={c} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
+    <circle cx={last[0]} cy={last[1]} r="3.2" fill={c} stroke={T.card} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
   </svg>);
 }
 function KpiCard({ kpi, result, breakout, spark, big }) {
@@ -1245,7 +1300,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
           <span className="text-[10px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.06em" }}>{sec.label}</span>
           {sec.items.map(secBar)}
         </div>))}
-      <div className="text-[10px] leading-snug" style={{ color: T.faint }}>Each deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so sections overlap and don't sum to the headline.</div>
+      {breakout && breakout.overlapNote && <div className="text-[10px] leading-snug" style={{ color: T.faint }}>Each deal is credited to everyone who touched it (owner/VP, AM &amp; follow-up), so sections overlap and don't sum to the headline.</div>}
     </div>)}
     {items && items.length > 0 && (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
       {items.slice(0, 12).map((b) => {
@@ -1392,7 +1447,7 @@ function SpeedToLeadView({ store, range }) {
 
 const CARD_TIERS = {
   lagging: ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "arip_dealreview", "rev_out_of_arip"],
-  leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs"],
+  leading: ["opps_to_arip", "opps_created", "leads_claimed", "leads_deaded", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "contracts_sent", "opps_assigned", "opps_deaded", "calls", "talk_time", "avg_talk_time_channel", "qcs"],
 };
 // The two "revenue moved into stage" tiles on the Transactions tab. Rendered in their own strip with the
 // record-type toggles (front-end / back-end) that filter only these two, and fed skip-imputed Buyer ARIP rows.
@@ -1683,7 +1738,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
   const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
-  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
+  const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "avg_talk_time_channel", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract"]
     : allCards.filter((id) => {
         if (isMktView) return KPIS[id].domain === "marketing";
@@ -1695,7 +1750,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       });
   const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
   const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
-  const CALL_IDS = ["calls", "talk_time", "qcs"];
+  const CALL_IDS = ["calls", "talk_time", "avg_talk_time_channel", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
   // Rows feeding the two "revenue moved into stage" tiles. Apply the front-/back-end record-type toggles,
@@ -1731,6 +1786,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
       if (!res || res.unattributable) { out[id] = null; return; }
+      // Always-on custom breakout (e.g. avg talk time split by inbound channel) — not rep-based, shows at every scope.
+      if (kpi.customBreakout) { const items = kpi.customBreakout(res.rows).filter((x) => x.value > 0); out[id] = items.length ? { items, custom: true } : null; return; }
       if (kpi.breakoutBy && org.rep !== "All") { // single-rep only (e.g. QC 3+/5+/10+ tiers). At team/All scope, fall through to the per-person breakout below.
         const custom = kpi.breakoutBy(res.rows).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
         if (custom.length) { out[id] = { items: custom, custom: true }; return; }
@@ -1753,44 +1810,42 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         }
         if (rf && ds.repFields.includes(rf)) primary = rf;
       }
-      // On the unfiltered All view, lagging KPIs get a role-sectioned breakout: each deal is
-      // credited to everyone who touched it (owner/VP, AM & follow-up), bucketed by the owner's
-      // actual directory role. Sections overlap and don't sum to the headline (labeled in-card).
-      if (ds.repFields && !orgFiltered) {
-        const ROLE_FIELDS = ds.repFields; // e.g. ["owner","acqManager","acqManager2","followUp"]
-        const buckets = {}; // rep -> rows[] (multi-credit)
+      // On the unfiltered All view, EVERY rep-attributed tile gets a TEAM-sectioned breakout: reps are
+      // grouped under their Context-directory team. Multi-credit datasets (repFields) credit each deal to
+      // everyone who touched it — those sections overlap and don't sum to the headline (noted in-card);
+      // single-credit datasets tie out, with any blank/off-roster remainder folded into one line.
+      if (!orgFiltered) {
+        const multi = !!ds.repFields;
+        const FIELDS = ds.repFields || [primary]; // primary = breakoutRep || repField
+        const valOf = (rows) => kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows);
+        const buckets = {}; // rep -> rows[] (dedupe roles within one row for multi-credit)
         res.rows.forEach((row) => {
-          const seen = new Set();
-          ROLE_FIELDS.forEach((f) => { const r = String(row[f] ?? "").trim(); if (r && !seen.has(r)) { seen.add(r); (buckets[r] = buckets[r] || []).push(row); } });
+          new Set(FIELDS.map((f) => String(row[f] ?? "").trim()).filter(Boolean)).forEach((r) => (buckets[r] = buckets[r] || []).push(row));
         });
-        const OFF = "Former team members"; // off-roster reps (not in the Context directory): de-identified + aggregated into one line
-        const classify = (rep) => {
-          const p = dir.byRep[rep];
-          if (!p) return null; // off-roster -> handled as a single aggregated bucket below, no names
-          const role = String(p.role || "");
-          if (/vice\s*president|\bvp\b/i.test(role)) return "Vice Presidents";
-          if (/acqu/i.test(role)) return "Acquisition Managers";
-          if (/follow.?up/i.test(role)) return "Follow-Up Specialists";
-          return role || "Other";
-        };
-        const order = ["Vice Presidents", "Acquisition Managers", "Follow-Up Specialists"];
+        const OFF = "Off-roster / former members"; // reps not in the Context directory: de-identified + aggregated
         const grouped = {};
-        const offRows = new Set(), offReps = new Set(); // union of off-roster rows (deduped) + distinct off-roster names
+        const offRows = new Set(), offReps = new Set();
         Object.entries(buckets).forEach(([rep, rows]) => {
-          const sec = classify(rep);
-          if (sec == null) { offReps.add(rep); rows.forEach((r) => offRows.add(r)); return; } // aggregate, don't name
-          const value = kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows);
+          const team = dir.byRep[rep]?.team;
+          if (!team) { offReps.add(rep); rows.forEach((r) => offRows.add(r)); return; } // aggregate, don't name
+          const value = valOf(rows);
           if (!(value > 0)) return;
-          (grouped[sec] = grouped[sec] || []).push({ label: rep, value });
+          (grouped[team] = grouped[team] || []).push({ label: rep, value });
         });
-        // Single aggregated line for everyone off the roster — computed over the deduped union of their rows.
         const offArr = [...offRows];
-        const offValue = offArr.length ? (kpi.compute ? kpi.compute(offArr) : kpi.agg(kpi.qualify ? offArr.filter(kpi.qualify) : offArr)) : 0;
-        if (offValue > 0) { const n = offReps.size; grouped[OFF] = [{ label: `${n} ${n === 1 ? "member" : "members"}`, value: offValue }]; }
-        const rank = (s) => { const i = order.indexOf(s); return i !== -1 ? i : (s === OFF ? 99 : 50); };
-        const secLabels = Object.keys(grouped).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-        const secArr = secLabels.map((label) => ({ label, items: grouped[label].sort((x, y) => y.value - x.value) }));
-        out[id] = secArr.length ? { sections: secArr, custom: false } : null;
+        const offValue = offArr.length ? valOf(offArr) : 0;
+        if (offValue > 0) { const n = offReps.size; grouped[OFF] = [{ label: `${n} ${n === 1 ? "person" : "people"}`, value: offValue }]; }
+        // Section order: alphabetical by team, Off-roster last.
+        const secLabels = Object.keys(grouped).sort((a, b) => (a === OFF ? 1 : b === OFF ? -1 : a.localeCompare(b)));
+        const sections = secLabels.map((label) => ({ label, items: grouped[label].sort((x, y) => y.value - x.value) }));
+        // Additive single-credit metrics must tie to the headline — fold any blank-attribution remainder in.
+        const additive = kpi.agg && !kpi.compute && ["number", "currency", "minutes", "duration"].includes(kpi.format);
+        if (!multi && additive && res.value != null) {
+          const shown = sections.reduce((s, sec) => s + sec.items.reduce((a, x) => a + x.value, 0), 0);
+          const rem = res.value - shown;
+          if (rem > 0.5) sections.push({ label: "Unassigned", items: [{ label: "No rep on record", value: rem }] });
+        }
+        out[id] = sections.length ? { sections, custom: false, overlapNote: multi } : null;
         return;
       }
       const groups = {};
@@ -2650,6 +2705,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-18 · v2-features-r28 (Team filter: added "AMs + Follow-Up Specialists" role-union option)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r29 (Sales: Avg ICP/appt + Avg Talk Time/inbound channel; team-sectioned tile breakouts; dramatic sparklines)</p>
   </>);
 }
