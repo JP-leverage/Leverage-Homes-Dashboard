@@ -1788,6 +1788,20 @@ const DISPO_CUMULATIVE = [
   { key: "cbOffer",      label: "Offer Made" },
 ];
 const OFFER_STATUS = "Walkthrough Attended - Offer Made";
+// Milestone ladder for the per-campaign live feed. rank orders the funnel; a member's "reached" level =
+// max(current-status rank, highest checked-checkbox rank), so reached counts are monotonic/inclusive
+// (reaching Offer implies Interested) even while the newer checkbox fields are still backfilling.
+const DISPO_MILESTONES = [
+  { rank: 1, key: "cbInterested", label: "Interested" },
+  { rank: 2, key: "cbConfirmed",  label: "Confirmed WT" },
+  { rank: 3, key: "cbWalkNew",    label: "WT Attended" },
+  { rank: 4, key: "cbOffer",      label: "Offer Made" },
+];
+const dispoCurRank = (st) => { st = String(st ?? "").trim();
+  if (st === OFFER_STATUS) return 4;
+  if (/^Walkthrough Attended/.test(st)) return 3;
+  if (st === "Confirmed Walkthrough") return 2;
+  if (st === "Interested") return 1; return 0; };
 
 function DispoStat({ label, value, sub }) {
   return (
@@ -1845,6 +1859,24 @@ function DispositionsView({ store, range, dir }) {
     return Object.entries(cnt).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   }, [rows]);
 
+  // Per-campaign live feed (active campaigns only). Each milestone shows current · reached, where reached is
+  // inclusive: member's reached level = max(current-status rank, highest checked checkbox rank).
+  const feed = useMemo(() => {
+    const g = new Map();
+    for (const r of active) {
+      const name = s(r.campName) || s(r.campId); if (!name) continue;
+      let o = g.get(name);
+      if (!o) { o = { name, members: 0, stage: s(r.stage), cur: [0, 0, 0, 0], reached: [0, 0, 0, 0] }; g.set(name, o); }
+      o.members++;
+      const cr = dispoCurRank(r.memberStatus);
+      let rr = cr;
+      DISPO_MILESTONES.forEach((m) => { if (s(r[m.key]) === "1") rr = Math.max(rr, m.rank); });
+      if (cr >= 1) o.cur[cr - 1]++;
+      for (let k = 1; k <= 4; k++) if (rr >= k) o.reached[k - 1]++;
+    }
+    return [...g.values()].sort((a, b) => b.members - a.members);
+  }, [active]);
+
   if (!rows.length) return (
     <div className="rounded-xl p-4 text-[13px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
       No Dispositions data loaded yet — check that the "Opportunities &amp; Campaigns x YTD" tab is present in the Dispositions workbook and the Sheets API key is set.</div>);
@@ -1873,6 +1905,36 @@ function DispositionsView({ store, range, dir }) {
       <Panel title="Active campaigns — cumulative milestones reached">
         <DispoBars items={cumulative} tint={T.chart ? T.chart[1] : T.accent} />
         <div className="text-[11px] mt-3" style={{ color: T.faint }}>Members who ever hit each milestone (from the status checkboxes) — true campaign health, independent of where they sit now. These fields are newly added, so counts fill in over time.</div>
+      </Panel>
+      <Panel title="Active campaigns — live feed">
+        {feed.length ? (() => {
+          const maxR = DISPO_MILESTONES.map((_, i) => Math.max(1, ...feed.map((f) => f.reached[i])));
+          return (<>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 720 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Campaign</th>
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Members</th>
+                  {DISPO_MILESTONES.map((m) => (
+                    <th key={m.label} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{m.label}</th>))}
+                </tr></thead>
+                <tbody>{feed.map((f) => (
+                  <tr key={f.name} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={f.name}>{f.name}</td>
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", color: T.sub }}>{f.members.toLocaleString()}</td>
+                    {DISPO_MILESTONES.map((m, i) => (
+                      <td key={m.label} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(f.reached[i], maxR[i], false) || {}) }}>
+                        <span style={{ fontWeight: 700 }}>{f.cur[i].toLocaleString()}</span>
+                        <span style={{ color: T.faint }}> · </span>
+                        <span style={{ color: T.sub }}>{f.reached[i].toLocaleString()}</span>
+                      </td>))}
+                  </tr>))}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell is <b style={{ color: T.ink }}>at status now</b> · <b>ever reached</b> (inclusive — reaching a later milestone counts toward every earlier one, and folds in the status checkboxes as they backfill). Active campaigns only, refreshes each sync.</div>
+          </>);
+        })() : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No active campaigns in range.</div>}
       </Panel>
     </div>);
 }
@@ -2897,6 +2959,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r33 (Dispositions workbook wired in: new Transactions sub-tabs Transaction Coordination / Dispositions; active-campaign health, outcome buckets, member funnel + cumulative milestones, member source)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r34 (Dispositions: added per-campaign live feed — current · reached (inclusive) counts per active campaign)</p>
   </>);
 }
