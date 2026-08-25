@@ -95,6 +95,7 @@ const WORKBOOKS = {
   leads_wb:      { id: "1iS4PLBML63qWqpgWwxRH83jFVw7TJ9SAlHK06JQ2MmI", title: "Homes Dashboard Pt 1 (Leads)" },
   transactions:  { id: "1nMLGx8PSvq1aSx6GAOCtaieNIiSEHHezNS-NxjkEH3w", title: "Homes Dashboard PT1 (Transactions)" },
   speed_to_lead: { id: STL_WORKBOOK_ID, title: "Homes Dashboard PT1 ( Speed To Lead )" },
+  dispositions:  { id: "14bZZxtILsNeWzJHgvlgrKj5boyhg5c_3FgSjr_SZ0gQ", title: "Homes Dashboard Pt 1 (Dispositions)" },
 };
 
 const DATASETS = {
@@ -336,6 +337,24 @@ const DATASETS = {
       newValue: "New Value", tab: "__tab",
     },
     dedupe: null, dateField: null, repField: null,
+  },
+  // Dispositions — campaign-member grain (one row per buyer/prospect per campaign). Stable Salesforce IDs
+  // (Opportunity ID, Campaign ID) enable cross-referencing to Opportunities/Transactions without text joins.
+  // Aggregate/stage-based, not per-rep, so it's consumed directly by DispositionsView rather than the KPI path.
+  dispositions: {
+    workbook: "dispositions",
+    require: ["Opportunity ID", "Campaign ID", "Campaign Member Status"], exclude: [],
+    tabInclude: /Opportunities.*Campaigns/i,
+    schema: {
+      oid: "Opportunity ID", oppName: "Opportunity Name", stage: "Stage",
+      campId: "Campaign ID", campName: "Campaign Name",
+      campStatus: "Campaign Status", memberStatus: "Campaign Member Status", member: "Full Name",
+      source: "Campaign Member Source", txType: "Transaction Type",
+      // cumulative "ever-reached" checkboxes (1/0) — sparse now, backfills over time
+      cbInterested: "Interested", cbConfirmed: "Confirmed Walkthrough",
+      cbWalkNew: "Walkthrough Attended - New", cbOffer: "Walkthrough Attended - Offer Made",
+    },
+    dedupe: null, dateField: "date", dateCandidates: ["Member Status Update Date"], repField: null,
   },
 };
 
@@ -1745,6 +1764,119 @@ function ListingPartnerView({ store, dir, range, lp }) {
     </div>
   </div>);
 }
+// ── DISPOSITIONS ─────────────────────────────────────────────────────────────────────────────────────
+// Config-driven so new stages/statuses drop in without touching the view. Confirmed with JP:
+//   • Active = opps being marketed to buyers (Pre Marketing / Delayed Marketing / Marketing)
+//   • Pre Closing folds into Closed/successful; Deals w/ Issues gets its own Watchlist bucket
+const DISPO_ACTIVE_STAGES = ["Pre Marketing", "Delayed Marketing", "Marketing"];
+const DISPO_OUTCOME_BUCKETS = [
+  { key: "closed", label: "Closed / Successful", tone: "good", stages: ["Closed Won", "Closed With Escrow", "Closed in Accounting Reconciliation", "Pre Closing"] },
+  { key: "uc",     label: "Under Contract",      tone: "good", stages: ["Under Contract"] },
+  { key: "arip",   label: "Buyer ARIP",          tone: "good", stages: ["Buyer ARIP"] },
+  { key: "watch",  label: "Watchlist · Deals w/ Issues", tone: "warn", stages: ["Deals w/ Issues"] },
+  { key: "dead",   label: "Dead",                tone: "bad",  stages: ["Dead"] },
+];
+// Current campaign-member status ordered as the dispositions funnel (buyer journey).
+const DISPO_STATUS_FUNNEL = ["New", "Sent", "Responded", "Interested", "Follow-Up Required", "Contact Attempted",
+  "Confirmed Walkthrough", "Can't Attend Walkthrough", "Walkthrough Attended - New", "Walkthrough Attended - Interested",
+  "Walkthrough Attended - Offer Made", "Walkthrough Attended - Not Interested", "Not Interested", "Prospect"];
+// Cumulative "ever-reached" milestones from the campaign-member checkboxes (sparse now, backfills over time).
+const DISPO_CUMULATIVE = [
+  { key: "cbInterested", label: "Interested" },
+  { key: "cbConfirmed",  label: "Confirmed Walkthrough" },
+  { key: "cbWalkNew",    label: "Walkthrough Attended" },
+  { key: "cbOffer",      label: "Offer Made" },
+];
+const OFFER_STATUS = "Walkthrough Attended - Offer Made";
+
+function DispoStat({ label, value, sub }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      <div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</div>
+      <div className="text-[26px] font-bold leading-tight mt-1" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {sub && <div className="text-[11px] mt-0.5" style={{ color: T.sub }}>{sub}</div>}
+    </div>);
+}
+function DispoBars({ items, tint }) {
+  const max = Math.max(1, ...items.map((x) => x.value));
+  const color = (it) => it.tone === "good" ? T.pos || T.accent : it.tone === "bad" ? (T.neg || T.warn) : it.tone === "warn" ? T.warn : (tint || T.accent);
+  if (!items.length) return <div className="text-[13px] py-6 text-center" style={{ color: T.sub }}>No records.</div>;
+  return (
+    <div className="flex flex-col gap-2">
+      {items.map((it) => (
+        <div key={it.label} className="flex items-center gap-3">
+          <div className="text-[12px] shrink-0" style={{ color: T.sub, width: 210, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={it.label}>{it.label}</div>
+          <div className="flex-1 h-[18px] rounded" style={{ background: T.track, position: "relative", minWidth: 40 }}>
+            <div style={{ position: "absolute", inset: 0, width: `${(it.value / max) * 100}%`, background: color(it), borderRadius: 4, minWidth: it.value > 0 ? 3 : 0 }} />
+          </div>
+          <div className="text-[12px] text-right shrink-0" style={{ color: T.ink, width: 62, fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{it.value.toLocaleString()}</div>
+        </div>))}
+    </div>);
+}
+
+function DispositionsView({ store, range, dir }) {
+  const rows = store.dispositions || [];
+  const s = (v) => String(v ?? "").trim();
+  const activeSet = new Set(DISPO_ACTIVE_STAGES);
+  const active = useMemo(() => rows.filter((r) => activeSet.has(s(r.stage))), [rows]);
+  const distinctOpps = (rs) => new Set(rs.map((r) => s(r.oid)).filter(Boolean)).size;
+
+  const activeCampaigns = useMemo(() => distinctOpps(active), [active]);
+  const offersAll = useMemo(() => rows.filter((r) => s(r.memberStatus) === OFFER_STATUS).length, [rows]);
+  const ucOpps = useMemo(() => distinctOpps(rows.filter((r) => s(r.stage) === "Under Contract")), [rows]);
+
+  const outcome = useMemo(() => DISPO_OUTCOME_BUCKETS.map((b) => {
+    const set = new Set(b.stages);
+    return { label: b.label, tone: b.tone, value: distinctOpps(rows.filter((r) => set.has(s(r.stage)))) };
+  }).filter((x) => x.value > 0), [rows]);
+
+  const funnel = useMemo(() => {
+    const cnt = {}; active.forEach((r) => { const k = s(r.memberStatus) || "(blank)"; cnt[k] = (cnt[k] || 0) + 1; });
+    return DISPO_STATUS_FUNNEL.filter((k) => cnt[k]).map((k) => ({ label: k, value: cnt[k] }));
+  }, [active]);
+
+  const cumulative = useMemo(() => DISPO_CUMULATIVE
+    .map((c) => ({ label: c.label, value: active.filter((r) => s(r[c.key]) === "1").length }))
+    .filter((x) => x.value > 0), [active]);
+
+  const sources = useMemo(() => {
+    const cnt = {};
+    rows.forEach((r) => { let v = s(r.source); if (!v) return; if (/^curb\s*hero$/i.test(v)) v = "Curb Hero"; cnt[v] = (cnt[v] || 0) + 1; });
+    return Object.entries(cnt).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  }, [rows]);
+
+  if (!rows.length) return (
+    <div className="rounded-xl p-4 text-[13px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
+      No Dispositions data loaded yet — check that the "Opportunities &amp; Campaigns x YTD" tab is present in the Dispositions workbook and the Sheets API key is set.</div>);
+
+  return (
+    <div className="flex flex-col gap-5" id="dispositions-view">
+      <div className="rounded-xl p-3 text-[12px]" style={{ background: T.track, color: T.sub }}>
+        Snapshot of current campaign &amp; member state (as of latest sync) — not sliced by the date range yet. Funnel &amp; cumulative milestones are scoped to <b style={{ color: T.ink }}>active campaigns</b> (Pre-Marketing / Marketing). Date-window slicing and per-campaign drilldown come next.
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <DispoStat label="Active Campaigns" value={activeCampaigns.toLocaleString()} sub="Pre-Mkt / Mkt opps" />
+        <DispoStat label="Active Buyer Pool" value={active.length.toLocaleString()} sub="members on active campaigns" />
+        <DispoStat label="Offers Made" value={offersAll.toLocaleString()} sub="members at offer-made (all campaigns)" />
+        <DispoStat label="Under Contract" value={ucOpps.toLocaleString()} sub="opps" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <Panel title="Opportunities by outcome"><DispoBars items={outcome} /></Panel>
+        <Panel title="Member source"><DispoBars items={sources} tint={T.chart ? T.chart[2] : T.accent} />
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Reverse Prospect / Taproot / Curb Hero / Showing Time Request. Sparse today — most members carry no source yet; this backfills over time.</div>
+        </Panel>
+      </div>
+      <Panel title="Active campaigns — current member status">
+        <DispoBars items={funnel} tint={T.accent} />
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Where the live buyer pool sits right now, on active (Pre-Marketing / Marketing) campaigns.</div>
+      </Panel>
+      <Panel title="Active campaigns — cumulative milestones reached">
+        <DispoBars items={cumulative} tint={T.chart ? T.chart[1] : T.accent} />
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Members who ever hit each milestone (from the status checkboxes) — true campaign health, independent of where they sit now. These fields are newly added, so counts fill in over time.</div>
+      </Panel>
+    </div>);
+}
+
 function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
@@ -1755,6 +1887,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const [stageLens, setStageLens] = useState("close"); // merged stage panel: "close" (resolved rate) | "advance"
   const [txTimeTab, setTxTimeTab] = useState("aripclose"); // merged timing panel: "aripclose" | "bystage" | "byrep"
   const [apptTab, setApptTab] = useState("showrate"); // merged Sales appointments panel: showrate | funnel | outcomes | breakout
+  const [txSub, setTxSub] = useState("coordination"); // Transactions view sub-tabs: coordination | dispositions
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -2193,7 +2326,18 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const lpName = lpScopeName(dir, org); // single Listing Partner selected → swap to their card set
   if (lpName) return <ListingPartnerView store={store} dir={dir} range={range} lp={lpName} />;
 
+  const txSubToggle = isTxView ? (
+    <div className="inline-flex rounded-lg p-0.5 self-start" style={{ background: T.track }}>
+      {[["coordination", "Transaction Coordination"], ["dispositions", "Dispositions"]].map(([v, l]) => (
+        <button key={v} onClick={() => setTxSub(v)} className="text-[13px] font-medium px-3 py-1.5 rounded-md transition-colors whitespace-nowrap"
+          style={{ background: txSub === v ? T.card : "transparent", color: txSub === v ? T.ink : T.sub, boxShadow: txSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+    </div>) : null;
+
+  if (isTxView && txSub === "dispositions") return (
+    <div className="flex flex-col gap-5">{txSubToggle}<DispositionsView store={store} range={range} dir={dir} /></div>);
+
   return (<div className="flex flex-col gap-5">
+    {txSubToggle}
     {(!isTxView && !isMktView) ? (<>
       <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
         label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />
@@ -2753,6 +2897,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r32 (New stages Post Showing + Pre Closing wired into conversion/flow engine; fixes Marketing-tab crash from r30/r31)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r33 (Dispositions workbook wired in: new Transactions sub-tabs Transaction Coordination / Dispositions; active-campaign health, outcome buckets, member funnel + cumulative milestones, member source)</p>
   </>);
 }
