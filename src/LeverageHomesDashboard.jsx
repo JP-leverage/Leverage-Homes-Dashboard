@@ -1803,13 +1803,24 @@ const dispoCurRank = (st) => { st = String(st ?? "").trim();
   if (st === "Confirmed Walkthrough") return 2;
   if (st === "Interested") return 1; return 0; };
 
-function DispoStat({ label, value, sub }) {
+function DispoStat({ label, value, sub, tag }) {
   return (
     <div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</div>
+      <div className="flex items-center gap-2">
+        <div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</div>
+        {tag && <DispoTag kind={tag} />}
+      </div>
       <div className="text-[26px] font-bold leading-tight mt-1" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{value}</div>
       {sub && <div className="text-[11px] mt-0.5" style={{ color: T.sub }}>{sub}</div>}
     </div>);
+}
+// Tags every metric with the lens it uses, so it's unambiguous which numbers move when the date picker changes.
+function DispoTag({ kind }) {
+  const dated = kind === "dated";
+  return (
+    <span className="text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded" title={dated ? "Follows the date filter (by opportunity close date)" : "Live snapshot — current state as of the latest sync; not affected by the date filter"}
+      style={{ background: dated ? T.accentSoft : T.track, color: dated ? T.accent : T.faint, whiteSpace: "nowrap" }}>
+      {dated ? "date-filtered" : "as of now"}</span>);
 }
 function DispoBars({ items, tint }) {
   const max = Math.max(1, ...items.map((x) => x.value));
@@ -1859,6 +1870,18 @@ function DispositionsView({ store, range, dir }) {
     return Object.entries(cnt).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   }, [rows]);
 
+  // DATE-DRIVEN lens. Dispositions has no close date of its own, so we join to the Closed Opps report on the
+  // stable Opportunity ID and filter by its Close Date — the one metric here that responds to the date picker.
+  const inRange = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+  const dispoOids = useMemo(() => new Set(rows.map((r) => s(r.oid)).filter(Boolean)), [rows]);
+  const closeMap = useMemo(() => { const m = new Map(); (store.closed_opps || []).forEach((r) => { const id = s(r.id); if (id) m.set(id, r); }); return m; }, [store]);
+  const closedInRange = useMemo(() => {
+    let n = 0, rev = 0; const byType = {};
+    dispoOids.forEach((id) => { const c = closeMap.get(id); if (c && inRange(c.closeDate)) { n++; rev += num(c.revenue); const t = s(c.txType) || "(unset)"; byType[t] = (byType[t] || 0) + 1; } });
+    return { n, rev, byType: Object.entries(byType).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value) };
+  }, [dispoOids, closeMap, range]);
+  const spanLabel = range ? `${iso(range.start)} → ${iso(range.end)}` : "all time";
+
   // Per-campaign live feed (active campaigns only). Each milestone shows current · reached, where reached is
   // inclusive: member's reached level = max(current-status rank, highest checked checkbox rank).
   const feed = useMemo(() => {
@@ -1883,30 +1906,59 @@ function DispositionsView({ store, range, dir }) {
 
   return (
     <div className="flex flex-col gap-5" id="dispositions-view">
-      <div className="rounded-xl p-3 text-[12px]" style={{ background: T.track, color: T.sub }}>
-        Snapshot of current campaign &amp; member state (as of latest sync) — not sliced by the date range yet. Funnel &amp; cumulative milestones are scoped to <b style={{ color: T.ink }}>active campaigns</b> (Pre-Marketing / Marketing). Date-window slicing and per-campaign drilldown come next.
+      <div className="rounded-xl p-3.5 text-[12px] leading-relaxed" style={{ background: T.track, color: T.sub }}>
+        <b style={{ color: T.ink }}>Dispositions</b> tracks buyer campaigns — the marketing of each opportunity to a pool of buyers, and where every campaign member sits in the buyer journey. Two lenses live on this tab, tagged on each metric:
+        <span className="inline-block mx-1"><DispoTag kind="snapshot" /></span> = live state right now (ignores the date filter),
+        <span className="inline-block mx-1"><DispoTag kind="dated" /></span> = follows the date filter, by opportunity <b>close date</b>. Active-campaign health is inherently a "right now" question, so it stays a snapshot; closed volume is the metric that moves with the date window. "Active" = opportunities in <b>Pre-Marketing, Delayed Marketing, or Marketing</b>.
       </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <DispoStat label="Active Campaigns" value={activeCampaigns.toLocaleString()} sub="Pre-Mkt / Mkt opps" />
-        <DispoStat label="Active Buyer Pool" value={active.length.toLocaleString()} sub="members on active campaigns" />
-        <DispoStat label="Offers Made" value={offersAll.toLocaleString()} sub="members at offer-made (all campaigns)" />
-        <DispoStat label="Under Contract" value={ucOpps.toLocaleString()} sub="opps" />
+        <DispoStat label="Active Campaigns" value={activeCampaigns.toLocaleString()} sub="opps being marketed (Pre-Mkt / Mkt)" tag="snapshot" />
+        <DispoStat label="Active Buyer Pool" value={active.length.toLocaleString()} sub="members on active campaigns" tag="snapshot" />
+        <DispoStat label="Offers Made" value={offersAll.toLocaleString()} sub="members at offer-made · all campaigns" tag="snapshot" />
+        <DispoStat label="Under Contract" value={ucOpps.toLocaleString()} sub="opps currently under contract" tag="snapshot" />
       </div>
+
+      <Panel title={`Closed opportunities — ${spanLabel}`}>
+        <div className="flex items-start gap-2 flex-wrap mb-3"><DispoTag kind="dated" /></div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Deals Closed</div>
+            <div className="text-[26px] font-bold" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{closedInRange.n.toLocaleString()}</div></div>
+          <div><div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Closed Revenue</div>
+            <div className="text-[26px] font-bold" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{fmt(closedInRange.rev, "currency")}</div></div>
+          <div className="col-span-2 md:col-span-1"><div className="text-[11px] uppercase tracking-wide mb-1" style={{ color: T.faint }}>By transaction type</div>
+            {closedInRange.byType.length ? <DispoBars items={closedInRange.byType} tint={T.chart ? T.chart[3] : T.accent} /> : <div className="text-[12px]" style={{ color: T.sub }}>—</div>}</div>
+        </div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Dispositions opportunities whose <b>close date</b> falls in the selected window — the one figure on this tab driven by the date filter. Joined from the Closed Opps report on Opportunity ID (Dispositions carries no close date of its own). Change the date range up top to move this panel.</div>
+      </Panel>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <Panel title="Opportunities by outcome"><DispoBars items={outcome} /></Panel>
-        <Panel title="Member source"><DispoBars items={sources} tint={T.chart ? T.chart[2] : T.accent} />
-          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Reverse Prospect / Taproot / Curb Hero / Showing Time Request. Sparse today — most members carry no source yet; this backfills over time.</div>
+        <Panel title="Current opportunity states">
+          <div className="mb-3"><DispoTag kind="snapshot" /></div>
+          <DispoBars items={outcome} />
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Where every disposition opportunity stands <b>right now</b>, by stage — one count per distinct opportunity. Under Contract / Buyer ARIP / Dead have no close date, so they're shown as current state rather than date-filtered. Pre-Closing folds into Closed; Deals w/ Issues is the Watchlist.</div>
+        </Panel>
+        <Panel title="Member source">
+          <div className="mb-3"><DispoTag kind="snapshot" /></div>
+          <DispoBars items={sources} tint={T.chart ? T.chart[2] : T.accent} />
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>How each buyer entered the campaign — Reverse Prospect, Taproot, Curb Hero, Showing Time Request. Sparse today: most members carry no source yet, so treat this as directional until the field backfills.</div>
         </Panel>
       </div>
+
       <Panel title="Active campaigns — current member status">
+        <div className="mb-3"><DispoTag kind="snapshot" /></div>
         <DispoBars items={funnel} tint={T.accent} />
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Where the live buyer pool sits right now, on active (Pre-Marketing / Marketing) campaigns.</div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Where the live buyer pool sits <b>this moment</b>, across active (Pre-Marketing / Marketing) campaigns — each member counted once at their current status. Read it as the top-of-funnel-to-offer shape of the active book.</div>
       </Panel>
+
       <Panel title="Active campaigns — cumulative milestones reached">
+        <div className="mb-3"><DispoTag kind="snapshot" /></div>
         <DispoBars items={cumulative} tint={T.chart ? T.chart[1] : T.accent} />
-        <div className="text-[11px] mt-3" style={{ color: T.faint }}>Members who ever hit each milestone (from the status checkboxes) — true campaign health, independent of where they sit now. These fields are newly added, so counts fill in over time.</div>
+        <div className="text-[11px] mt-3" style={{ color: T.faint }}>How many members <b>ever hit</b> each milestone — from the status checkboxes, so it counts people who've since moved on. This is true campaign health (throughput), independent of where members sit now. The checkbox fields are newly added, so these fill in over time.</div>
       </Panel>
+
       <Panel title="Active campaigns — live feed">
+        <div className="mb-3"><DispoTag kind="snapshot" /></div>
         {feed.length ? (() => {
           const maxR = DISPO_MILESTONES.map((_, i) => Math.max(1, ...feed.map((f) => f.reached[i])));
           return (<>
@@ -1934,7 +1986,7 @@ function DispositionsView({ store, range, dir }) {
             </div>
             <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell is <b style={{ color: T.ink }}>at status now</b> · <b>ever reached</b> (inclusive — reaching a later milestone counts toward every earlier one, and folds in the status checkboxes as they backfill). Active campaigns only, refreshes each sync.</div>
           </>);
-        })() : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No active campaigns in range.</div>}
+        })() : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No active campaigns.</div>}
       </Panel>
     </div>);
 }
@@ -2959,6 +3011,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r34 (Dispositions: added per-campaign live feed — current · reached (inclusive) counts per active campaign)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r35 (Dispositions: date filter now drives Closed-in-range via Opportunity ID → close-date join; snapshot vs date-filtered tags + help text throughout)</p>
   </>);
 }
