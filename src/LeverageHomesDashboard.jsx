@@ -756,7 +756,7 @@ const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
 const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
-const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues", "Probate"];
+const ARIP_OUT_STAGES = ["Deal Review", "Pre Marketing", "Delayed Marketing", "Marketing", "Post Showing", "Buyer ARIP", "Under Contract", "Closed in Accounting Reconciliation", "Closed With Escrow", "Closed Won", "On Market", "Owned", "Rehab In Progress", "Pre Closing", "Investment Committee (IC)", "Investment Committee", "Deals w/ Issues", "Probate"];
 const isAripOut = (v) => ARIP_OUT_STAGES.includes(String(v ?? "").trim());
 // Stage-transition durations for the Transactions view. Each = day-gap between two date columns on the
 // Median Duration tabs (Transactions workbook), computed in-app from the raw stage dates — not the sheet's
@@ -792,7 +792,7 @@ function txDurCell(c) {
 const STAGE_ORDER = ["New", "Short Term Nurture", "Cadence Replied", "Nurture", "Appointment Set",
   "Underwriting Complete", "Appt Set Offering", "Appointment DNH", "Negotiation", "Red Zone",
   "Arip", "Deal Review", "Investment Committee (IC)", "Delayed Marketing", "Renegotiation",
-  "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Pre Closing"];
+  "Pre Marketing", "Marketing", "Post Showing", "Buyer ARIP", "Under Contract", "Pre Closing"];
 const STAGE_POS = STAGE_ORDER.reduce((m, s, i) => { m[s] = i + 1; return m; }, {});
 STAGE_POS["Investment Committee"] = STAGE_POS["Investment Committee (IC)"]; // data uses the "(IC)" suffix
 STAGE_POS["ARIP"] = STAGE_POS["Arip"];
@@ -814,12 +814,14 @@ const STAGE_CONV_FROM = [
   { id: "dealreview", label: "Deal Review → Close",    stage: "Deal Review" },
   { id: "premkt",     label: "Pre-Marketing → Close",  stage: "Pre Marketing" },
   { id: "mkt",        label: "Marketing → Close",      stage: "Marketing" },
+  { id: "postshow",   label: "Post Showing → Close",   stage: "Post Showing" },
   { id: "buyerarip",  label: "Buyer ARIP → Close",     stage: "Buyer ARIP" },
   { id: "uc",         label: "Under Contract → Close", stage: "Under Contract" },
+  { id: "preclose",   label: "Pre Closing → Close",    stage: "Pre Closing" },
 ];
-const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Buyer ARIP", "Under Contract", "Closed"];
+const STAGE_CONV_CHAIN = ["Arip", "Deal Review", "Pre Marketing", "Marketing", "Post Showing", "Buyer ARIP", "Under Contract", "Pre Closing", "Closed"];
 const STAGE_SHORT = { "Arip": "ARIP", "Deal Review": "Deal Review", "Pre Marketing": "Pre-Marketing",
-  "Marketing": "Marketing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract", "Closed": "Closed" };
+  "Marketing": "Marketing", "Post Showing": "Post Showing", "Buyer ARIP": "Buyer ARIP", "Under Contract": "Under Contract", "Pre Closing": "Pre-Closing", "Closed": "Closed" };
 // Front-end purchases legitimately skip Buyer ARIP. The Transactions stage panels expose a toggle to pull
 // these out entirely; this is the membership test for that toggle.
 const isExcludedRecord = (r) => /front.?end/i.test(String(r.recordType ?? ""));
@@ -2011,6 +2013,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       bySubject: grp((r) => normSub(r.subject)).slice(0, 8),
       overall: rows.length ? mean(rows.map((r) => Number(r.icp))) : null, n: rows.length };
   }, [store, org, range, dir]);
+  const mktLeadsBySource  = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const mktLeadsBySegment = useMemo(() => breakdown(applyFilters(store.leads || [], DATASETS.leads, org, range, dir), (r) => r.segment), [store, org, range, dir]);
   const mktOppsBySource   = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.source), [store, org, range, dir]);
   const mktOppsBySegment  = useMemo(() => breakdown(applyFilters(store.mkt_opps || [], DATASETS.mkt_opps, org, range, dir), (r) => r.segment), [store, org, range, dir]);
@@ -2750,6 +2753,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r31 (Moved Avg Talk Time / inbound channel from Sales to the Speed to Lead tab)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r32 (New stages Post Showing + Pre Closing wired into conversion/flow engine; fixes Marketing-tab crash from r30/r31)</p>
   </>);
 }
