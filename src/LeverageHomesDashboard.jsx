@@ -920,6 +920,57 @@ function stageReportByVP(agg, range, dir) {
     return { vp, cells };
   }).sort((a, b) => a.vp.localeCompare(b.vp));
 }
+// ICP score × funnel-stage matrix (Marketing view). ISA ICP Total Score lives on opps_created keyed by
+// Opportunity ID, NOT on stage_history — so the caller joins it onto each opp in the stage aggregation
+// (o.icp) before calling this. Rows = each distinct ISA ICP score present (+ an "Unscored" row for blanks),
+// built from the data so it's robust if the score ever runs past 7. Columns = ARIP / Deal Review / Under
+// Contract / Closed. Cell = # opps that ENTERED that stage within the period (flow), matching how every
+// other stage metric here date-filters; Closed = confirmed won with a close date in the window. `coverage`
+// = share of the in-period funnel opps that carry an ICP score, surfaced so sync gaps read as data.
+const ICP_FUNNEL_STAGES = [
+  { key: "arip",       label: "ARIP",           stage: "Arip" },
+  { key: "dealreview", label: "Deal Review",    stage: "Deal Review" },
+  { key: "uc",         label: "Under Contract", stage: "Under Contract" },
+  { key: "closed",     label: "Closed",         stage: "Closed" },
+];
+function icpScoreFunnel(agg, range, closeById) {
+  const closedInRange = (o, id) => {
+    if (!o.won) return false;
+    if (!range) return true;
+    const c = closeById && closeById.get(id);
+    const t = c ? parseDate(c.closeDate) : (o.entered["Under Contract"] || null); // fall back to UC date if no close row
+    return !!(t && t >= range.start && t <= range.end);
+  };
+  const bucket = (icp) => {
+    if (icp == null || String(icp).trim() === "") return { k: "__ns", label: "Unscored", sort: 1e6 };
+    const n = Number(icp); if (isNaN(n)) return { k: "__ns", label: "Unscored", sort: 1e6 };
+    const v = Math.trunc(n); return { k: String(v), label: `ICP ${v}`, sort: v };
+  };
+  const map = new Map();
+  let scoredOpps = 0, totalOpps = 0;
+  agg.forEach((o, id) => {
+    const hitArip = enteredInRange(o, "Arip", range);
+    const hitDR   = enteredInRange(o, "Deal Review", range);
+    const hitUC   = enteredInRange(o, "Under Contract", range);
+    const hitCl   = closedInRange(o, id);
+    if (!(hitArip || hitDR || hitUC || hitCl)) return; // opp didn't touch the funnel in-period
+    const b = bucket(o.icp);
+    totalOpps++; if (b.k !== "__ns") scoredOpps++;
+    let row = map.get(b.k);
+    if (!row) { row = { key: b.k, label: b.label, sort: b.sort, arip: 0, dealreview: 0, uc: 0, closed: 0 }; map.set(b.k, row); }
+    if (hitArip) row.arip++;
+    if (hitDR) row.dealreview++;
+    if (hitUC) row.uc++;
+    if (hitCl) row.closed++;
+  });
+  const rows = [...map.values()]
+    .map((r) => ({ ...r, total: r.arip + r.dealreview + r.uc + r.closed }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => a.sort - b.sort);
+  const totals = rows.reduce((t, r) => ({ arip: t.arip + r.arip, dealreview: t.dealreview + r.dealreview, uc: t.uc + r.uc, closed: t.closed + r.closed, total: t.total + r.total }),
+    { arip: 0, dealreview: 0, uc: 0, closed: 0, total: 0 });
+  return { rows, totals, coverage: totalOpps ? scoredOpps / totalOpps : null };
+}
 // Stage FLOW for the selected period — movement, not outcomes. Counts stage transitions whose Edit Date
 // falls in the window: how many deals ENTERED each core stage, how many LEFT, and of those that left, how
 // many Advanced (moved forward or closed), Reverted (slipped to an earlier stage), or went Dead. Because it's
@@ -2435,6 +2486,29 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, rangeFwd, dir]);
   const mktClosedByChannel = useMemo(() => groupSum(applyFilters(store.pipeline || [], DATASETS.pipeline, org, null, dir).filter((o) => isClosedStage(o.stage) && inClose(o.closeDate)),
     (r) => String(r.source || "").trim() || "(unset)", (r) => num(r.forecast)).sort((a, b) => b.value - a.value), [store, org, range, dir]);
+  // ICP score → funnel-stage matrix (Marketing). ISA ICP isn't on stage_history, so join it from opps_created
+  // by Opportunity ID, stamp onto each opp in the stage aggregation, then bucket by score. Company-wide (org
+  // is already stripped to company scope on the Marketing view); the period is applied per stage inside the engine.
+  const icpFunnel = useMemo(() => {
+    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const closedSet = new Set((store.closed_opps || []).map((r) => String(r.id ?? "").trim()).filter(Boolean));
+    const closeById = new Map();
+    (store.closed_opps || []).forEach((r) => { const id = String(r.id ?? "").trim(); if (id && !closeById.has(id)) closeById.set(id, r); });
+    // ISA ICP lookup, unioned across every opp-keyed tab that already carries it (first non-blank per
+    // Opportunity ID), so a long-cycle opp missing from opps_created still gets its score instead of landing
+    // in Unscored. Same join key, no duplicated columns anywhere. Note mkt_opps stores ISA ICP under its own
+    // field (isaIcp) — its `icp` is Total ICP Score, a different scale — so read isaIcp there.
+    const icpById = new Map();
+    const addIcp = (rows, field) => (rows || []).forEach((r) => { const id = String(r.id ?? "").trim(); const v = r[field];
+      if (id && !icpById.has(id) && v != null && String(v).trim() !== "") icpById.set(id, v); });
+    addIcp(store.opps_created, "icp");
+    addIcp(store.arip_entered, "icp");
+    addIcp(store.arip_out, "icp");
+    addIcp(store.mkt_opps, "isaIcp");
+    const agg = stageOppAgg(rows, closedSet);
+    agg.forEach((o, id) => { o.icp = icpById.get(id); });
+    return icpScoreFunnel(agg, range, closeById);
+  }, [store, org, range, dir]);
 
   if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} dir={dir} />;
   const lpName = lpScopeName(dir, org); // single Listing Partner selected → swap to their card set
@@ -2799,6 +2873,37 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <Panel title={`Forecasted pipeline by channel — ${drillLabel}`}>{mktPipeByChannel.length ? <MoneyBars items={mktPipeByChannel} tint={T.accent} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No open pipeline for this scope.</div>}</Panel>
         <Panel title={`Closed revenue by channel — ${drillLabel}`}>{mktClosedByChannel.length ? <MoneyBars items={mktClosedByChannel} tint={T.good} fmtVal={(v) => fmt(v, "currency")} /> : <div className="text-[13px] py-4 text-center" style={{ color: T.sub }}>No closed revenue for this scope.</div>}</Panel>
       </div>
+      <Panel title="ICP score → funnel stage — company">
+        {icpFunnel.rows.length ? (() => {
+          const cols = ICP_FUNNEL_STAGES;
+          const maxOf = {}; cols.forEach((c) => { maxOf[c.key] = Math.max(1, ...icpFunnel.rows.map((r) => r[c.key])); });
+          return (<>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 560 }}>
+                <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+                  <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>ICP score</th>
+                  {cols.map((c) => <th key={c.key} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{c.label}</th>)}
+                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Total</th>
+                </tr></thead>
+                <tbody>{icpFunnel.rows.map((r) => (
+                  <tr key={r.key} style={{ color: T.ink }}>
+                    <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap", color: r.key === "__ns" ? T.faint : T.ink }}>{r.label}</td>
+                    {cols.map((c) => (
+                      <td key={c.key} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", ...(heatBg(r[c.key], maxOf[c.key], false) || {}) }}>{r[c.key] ? r[c.key].toLocaleString() : <span style={{ color: T.faint }}>—</span>}</td>))}
+                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", color: T.sub, fontWeight: 600 }}>{r.total.toLocaleString()}</td>
+                  </tr>))}
+                  <tr style={{ color: T.ink, fontWeight: 700 }}>
+                    <td className="py-2 px-2">Total</td>
+                    {cols.map((c) => <td key={c.key} className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{icpFunnel.totals[c.key].toLocaleString()}</td>)}
+                    <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>{icpFunnel.totals.total.toLocaleString()}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell = opportunities that <b>reached that stage within the selected period</b> (Closed = confirmed won with a close date in the window), split by <b>ISA ICP Total Score</b>. ISA ICP is joined from the Opportunities workbook by Opportunity ID — stage history carries no ICP{icpFunnel.coverage != null ? <> · <b>{Math.round(icpFunnel.coverage * 100)}%</b> of these opps carry a synced ICP</> : null}. The <b>Unscored</b> row is opps with no ICP yet. Company-wide; moves with the Period filter.</div>
+          </>);
+        })() : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No opportunities reached these stages in the selected period.</div>}
+      </Panel>
       <Panel title="Marketing view">
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
@@ -3011,6 +3116,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-08-25 · v2-features-r35 (Dispositions: date filter now drives Closed-in-range via Opportunity ID → close-date join; snapshot vs date-filtered tags + help text throughout)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r37 (Marketing ICP funnel: ISA ICP lookup now unions opps_created + arip_entered + arip_out + mkt_opps by Opportunity ID — first non-blank wins — so long-cycle opps get scored instead of landing in Unscored; no Sheets column changes)</p>
   </>);
 }
