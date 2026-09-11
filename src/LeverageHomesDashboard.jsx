@@ -1226,6 +1226,43 @@ function SegPctBars({ data, noun }) {
     <div className="text-[11px] mt-3" style={{ color: T.faint }}>% across Core / Secondary / Exploratory (segmented {noun} only). <b>{data.blank}</b> of {data.total} {noun} are unsegmented and excluded from the %.</div>
   </>);
 }
+// Lead-conversion table: one row per key (lead source or segment) with Lead→Opp / Lead→Appt / Lead→ARIP.
+// Each ratio cell shows the % (headline) and its numerator count beneath; the Leads column is the shared
+// denominator, so every cell is auditable. Bottom row = blended total across the shown keys.
+function MktConvTable({ data, labelHead }) {
+  const rows = data.rows || [];
+  const maxOf = (f) => Math.max(0.0001, ...rows.map((r) => r[f] || 0));
+  const mOpp = maxOf("toOpp"), mAppt = maxOf("toAppt"), mArip = maxOf("toArip");
+  const cell = (ratio, n, max, isTotal) => (
+    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", borderTop: isTotal ? `2px solid ${T.border}` : "none", ...(isTotal || ratio == null ? {} : heatBg(ratio, max, false) || {}) }}>
+      {ratio == null ? <span style={{ color: T.faint }}>—</span>
+        : <><span style={{ fontWeight: isTotal ? 700 : 600 }}>{(ratio * 100).toFixed(1)}%</span><span className="text-[10px]" style={{ color: T.faint }}> · {n.toLocaleString()}</span></>}
+    </td>);
+  const Row = (r, isTotal) => (
+    <tr key={r.key} style={{ color: T.ink }}>
+      <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: isTotal ? 700 : 600, whiteSpace: "nowrap", borderTop: isTotal ? `2px solid ${T.border}` : "none" }}>{isTotal ? "All" : r.key}</td>
+      <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums", fontWeight: isTotal ? 700 : 400, borderTop: isTotal ? `2px solid ${T.border}` : "none" }}>{r.leads.toLocaleString()}</td>
+      {cell(r.toOpp, r.opps, mOpp, isTotal)}
+      {cell(r.toAppt, r.appts, mAppt, isTotal)}
+      {cell(r.toArip, r.arips, mArip, isTotal)}
+    </tr>);
+  return (
+    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 520 }}>
+        <thead><tr style={{ color: T.faint }} className="text-[11px] uppercase tracking-wide">
+          <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>{labelHead}</th>
+          <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Leads</th>
+          <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Lead → Opp</th>
+          <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Lead → Appt</th>
+          <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Lead → ARIP</th>
+        </tr></thead>
+        <tbody>{rows.length ? rows.map((r) => Row(r, false)) : (
+          <tr><td colSpan={5} className="py-4 text-center text-[13px]" style={{ color: T.sub }}>No leads in the selected period.</td></tr>)}
+          {rows.length > 0 && Row(data.total, true)}
+        </tbody>
+      </table>
+    </div>);
+}
 function orgOptions(dir, org) {
   const people = dir.people || [];
   if (!people.length) return dir.options;
@@ -2330,6 +2367,51 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const named = order.reduce((a, k) => a + m[k], 0) || 1;
     return { items: order.map((k) => ({ label: k, value: m[k], pct: m[k] / named })), blank, total: rows.length };
   }, [store, org, range, dir]);
+  // Lead-conversion by lead source and by marketing segmentation. Period ratios (count-in-period ÷
+  // leads-in-period), each leg on its own date axis: leads by Create Date, opps (mkt_opps) & appts
+  // (appts_seg) by Created Date, ARIP by Edit Date. Denominator = leads bucketed by their own source/
+  // segment. ARIP carries neither field, so each unique ARIP opp is attributed via an Opportunity-ID →
+  // source/segment map unioned across the opp-keyed tabs that do (mkt_opps, arip_out) — same join the ICP
+  // funnel uses. Coverage (share of ARIP opps that resolved a source/segment) is surfaced in the panels.
+  // Opportunity ID → source / segment, unioned across the opp-keyed tabs that carry them (arip_entered
+  // has neither), first non-blank wins — same join the ICP funnel uses. Depends only on the loaded store,
+  // so it's built once and reused; Team/Period changes below don't rebuild it.
+  const mktOppMaps = useMemo(() => {
+    const srcById = new Map(), segById = new Map();
+    const addMap = (rows) => (rows || []).forEach((r) => { const id = String(r.id ?? "").trim(); if (!id) return;
+      const sv = String(r.source ?? "").trim(); if (sv && !srcById.has(id)) srcById.set(id, sv);
+      const gv = String(r.segment ?? "").trim(); if (gv && !segById.has(id)) segById.set(id, gv); });
+    addMap(store.mkt_opps); addMap(store.arip_out);
+    return { srcById, segById };
+  }, [store]);
+  const mktConversion = useMemo(() => {
+    const f = (rows, ds) => applyFilters(rows || [], ds, org, range, dir);
+    const leadRows = f(store.leads, DATASETS.leads);
+    const oppRows  = f(store.mkt_opps, DATASETS.mkt_opps);
+    const apptRows = f(store.appts_seg, DATASETS.appts_seg);
+    const aripRows = f(store.arip_entered, DATASETS.arip_entered); // dedupeInPeriod → unique opps in window
+    const { srcById, segById } = mktOppMaps;
+    const cnt = (rows, keyOf) => { const m = {}; rows.forEach((r) => { const k = keyOf(r); if (k) m[k] = (m[k] || 0) + 1; }); return m; };
+    const build = (keyOf, aripMap, fixedKeys, sortByLeads) => {
+      const L = cnt(leadRows, keyOf), O = cnt(oppRows, keyOf), A = cnt(apptRows, keyOf);
+      const R = {}; let arMapped = 0;
+      aripRows.forEach((o) => { const k = aripMap.get(String(o.id ?? "").trim()); if (k) { R[k] = (R[k] || 0) + 1; arMapped++; } });
+      let keys = fixedKeys || [...new Set([...Object.keys(L), ...Object.keys(O), ...Object.keys(A), ...Object.keys(R)])];
+      if (sortByLeads) keys = keys.filter((k) => L[k] || O[k] || A[k] || R[k]).sort((a, b) => (L[b] || 0) - (L[a] || 0) || (O[b] || 0) - (O[a] || 0));
+      const mk = (k, leads, opps, appts, arips) => ({ key: k, leads, opps, appts, arips,
+        toOpp: leads ? opps / leads : null, toAppt: leads ? appts / leads : null, toArip: leads ? arips / leads : null });
+      const rows = keys.map((k) => mk(k, L[k] || 0, O[k] || 0, A[k] || 0, R[k] || 0));
+      const sum = (arr, g) => arr.reduce((s, x) => s + g(x), 0);
+      const total = mk("All", sum(rows, (x) => x.leads), sum(rows, (x) => x.opps), sum(rows, (x) => x.appts), sum(rows, (x) => x.arips));
+      return { rows, total, aripCoverage: aripRows.length ? arMapped / aripRows.length : null };
+    };
+    const SEG = ["Core", "Secondary", "Exploratory"];
+    const srcKey = (r) => String(r.source ?? "").trim();
+    const segKey = (r) => { const s = String(r.segment ?? "").trim(); return SEG.includes(s) ? s : ""; };
+    // ARIP id→segment map, restricted to the three canonical segments (mirrors how leads/opps segment views drop others)
+    const segAripMap = new Map(); segById.forEach((v, id) => { if (SEG.includes(v)) segAripMap.set(id, v); });
+    return { bySource: build(srcKey, srcById, null, true), bySegment: build(segKey, segAripMap, SEG, false) };
+  }, [store, org, range, dir, mktOppMaps]);
   const inClose = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
   const inCloseFwd = (d) => { if (!rangeFwd) return true; const t = parseDate(d); return !!(t && t >= rangeFwd.start && t <= rangeFwd.end); };
   const txByType = useMemo(() => {
@@ -2857,6 +2939,17 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           </BarChart></ResponsiveContainer></div></Panel>
       </div>
     </>) : isMktView ? (<>
+      <SubHead label="Lead conversion" note="of leads in the period, the share that became an opp / appointment / ARIP · each leg on its own date axis · company-wide" />
+      <div className="flex flex-col gap-5">
+        <Panel title="Lead conversion by source">
+          <MktConvTable data={mktConversion.bySource} labelHead="Lead source" />
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Each cell = numerator ÷ leads of that source, with the raw numerator beside the %. <b>Lead → Opp</b> and <b>Lead → Appt</b> match on the record's own Lead Source; <b>Lead → ARIP</b> joins each ARIP opp to its source by Opportunity ID{mktConversion.bySource.aripCoverage != null ? <> — <b>{Math.round(mktConversion.bySource.aripCoverage * 100)}%</b> of in-period ARIP opps resolved a source</> : null}. Blended in the <b>All</b> row. Company-wide; moves with the Period filter.</div>
+        </Panel>
+        <Panel title="Lead conversion by segmentation">
+          <MktConvTable data={mktConversion.bySegment} labelHead="Segment" />
+          <div className="text-[11px] mt-3" style={{ color: T.faint }}>Core / Secondary / Exploratory only (unsegmented records excluded, so the <b>All</b> row covers segmented leads){mktConversion.bySegment.aripCoverage != null ? <> · <b>{Math.round(mktConversion.bySegment.aripCoverage * 100)}%</b> of ARIP opps resolved a segment</> : null}. ARIP is joined by Opportunity ID; Opp &amp; Appt match on the record's own Marketing Segmentation.</div>
+        </Panel>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Panel title="Leads by source"><Bars items={mktLeadsBySource.items} /></Panel>
         <Panel title="Leads by marketing segmentation"><Bars items={mktLeadsBySegment.items} tint={T.chart[1]} /></Panel>
@@ -3116,6 +3209,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r37 (Marketing ICP funnel: ISA ICP lookup now unions opps_created + arip_entered + arip_out + mkt_opps by Opportunity ID — first non-blank wins — so long-cycle opps get scored instead of landing in Unscored; no Sheets column changes)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r38 (Marketing lead-conversion by source & segmentation: Lead→Opp, Lead→Appt, Lead→ARIP as period ratios per Lead Source and per Marketing Segmentation, with a blended All row; ARIP joined to source/segment by Opportunity ID via the same opp-keyed union as the ICP funnel, coverage surfaced; no Sheets column changes)</p>
   </>);
 }
