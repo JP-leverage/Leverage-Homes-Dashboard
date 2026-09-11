@@ -1000,6 +1000,11 @@ function stageFlow(rows, range) {
 //   scheduled (show-rate denominator) = every appt with a Start in window EXCEPT the excluded ones —
 //     this INCLUDES blanks, no-shows, and "Attended, No Show", so they count against the rate
 const apptExcluded = (o) => /cancel|reschedul/i.test(String(o ?? ""));
+// Contract Review appointments count toward the company hero total, but a rep's per-rep bar only keeps them
+// when that rep (the Created By) is a VP — a VP's Contract Reviews stay in the VP breakout; everyone else's
+// (AM, Follow-Up, Listing Partner, off-roster) are dropped as a transaction step, not setter/closer output.
+// Exact subject match — the stray "Contract review reminder - …" is a different subject and is left in.
+const isContractReview = (r) => String(r.subject ?? "").trim().toLowerCase() === "contract review";
 const apptAttended = (o) => { const s = String(o ?? "").trim().toLowerCase();
   if (/no show|missed/.test(s)) return false;
   return /appointment met/.test(s) || s === "met"; };
@@ -1023,7 +1028,7 @@ const KPIS = {
     agg: (rows) => rows.reduce((s, o) => s + num(o.forecast), 0) },
   opps_created: { id: "opps_created", label: "Opps Created", dataset: "opps_created", format: "number",
     targetKey: "opps_created", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
-  appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number",
+  appointments: { id: "appointments", label: "Appointments Set", dataset: "appointments", format: "number", crExcludeNonVp: true,
     targetKey: "appointments", targetType: "volume", higherIsBetter: true, agg: (rows) => rows.length },
   // Avg ICP of appointments SET, averaged over appts that carry an ICP (blank/unsynced rows excluded so
   // they don't drag it to 0). Breaks out per setter (Created By) via the standard rep-breakout path,
@@ -1061,7 +1066,7 @@ const KPIS = {
     subStat: (rows) => { const n = dedupeLatest(rows.filter((r) => String(r.newValue ?? "").trim() === "Under Contract"), "id", "date").length; return `${n.toLocaleString()} ${n === 1 ? "opp" : "opps"} moved in · latest entry per opp`; } },
   contracts_sent: { id: "contracts_sent", label: "Contracts Sent", dataset: "contracts_sent", format: "number", higherIsBetter: true, vpOnly: true,
     targetKey: "contracts_sent", targetType: "volume", qualify: (r) => String(r.subject).trim().toLowerCase() === "contract sent", agg: (rows) => rows.length },
-  appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true,
+  appts_attended: { id: "appts_attended", label: "Appts Attended", dataset: "appointments_attended", format: "number", higherIsBetter: true, amFuOnly: true, crExcludeNonVp: true,
     targetKey: "appts_attended", targetType: "volume",
     qualify: (r) => !r.lpAssigned && apptAttended(r.outcome), agg: (rows) => rows.length },
   show_rate: { id: "show_rate", label: "Show Rate", dataset: "appointments_attended", format: "percent", higherIsBetter: true, amFuOnly: true, targetKey: "show_rate", targetType: "rate",
@@ -2172,6 +2177,9 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       // grouped under their Context-directory team. Multi-credit datasets (repFields) credit each deal to
       // everyone who touched it — those sections overlap and don't sum to the headline (noted in-card);
       // single-credit datasets tie out, with any blank/off-roster remainder folded into one line.
+      // Contract Review counts in the hero total, but a rep's bar keeps it only when the rep (Created By) is
+      // a VP — every non-VP rep (AM, Follow-Up, Listing Partner, off-roster) has it dropped. No-op elsewhere.
+      const crFilter = (rep, rows) => (kpi.crExcludeNonVp && !/vice\s*president|\bvp\b/i.test(String(dir.byRep[rep]?.role || ""))) ? rows.filter((r) => !isContractReview(r)) : rows;
       if (!orgFiltered) {
         const multi = !!ds.repFields;
         const FIELDS = ds.repFields || [primary]; // primary = breakoutRep || repField
@@ -2186,19 +2194,19 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         Object.entries(buckets).forEach(([rep, rows]) => {
           const team = dir.byRep[rep]?.team;
           if (!team) { offReps.add(rep); rows.forEach((r) => offRows.add(r)); return; } // aggregate, don't name
-          const value = valOf(rows);
+          const value = valOf(crFilter(rep, rows));
           if (!(value > 0)) return;
           (grouped[team] = grouped[team] || []).push({ label: rep, value });
         });
         const offArr = [...offRows];
-        const offValue = offArr.length ? valOf(offArr) : 0;
+        const offValue = offArr.length ? valOf(kpi.crExcludeNonVp ? offArr.filter((r) => !isContractReview(r)) : offArr) : 0; // off-roster = non-VP → drop CR
         if (offValue > 0) { const n = offReps.size; grouped[OFF] = [{ label: `${n} ${n === 1 ? "person" : "people"}`, value: offValue }]; }
         // Section order: alphabetical by team, Off-roster last.
         const secLabels = Object.keys(grouped).sort((a, b) => (a === OFF ? 1 : b === OFF ? -1 : a.localeCompare(b)));
         const sections = secLabels.map((label) => ({ label, items: grouped[label].sort((x, y) => y.value - x.value) }));
         // Additive single-credit metrics must tie to the headline — fold any blank-attribution remainder in.
         const additive = kpi.agg && !kpi.compute && ["number", "currency", "minutes", "duration"].includes(kpi.format);
-        if (!multi && additive && res.value != null) {
+        if (!multi && additive && !kpi.crExcludeNonVp && res.value != null) { // CR-excluded tiles: parts intentionally < hero, don't fold a fake remainder
           const shown = sections.reduce((s, sec) => s + sec.items.reduce((a, x) => a + x.value, 0), 0);
           const rem = res.value - shown;
           if (rem > 0.5) sections.push({ label: "Unassigned", items: [{ label: "No rep on record", value: rem }] });
@@ -2217,8 +2225,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           if (r && inScope(r)) (groups[r] = groups[r] || []).push(row);
         }
       });
-      const items = Object.entries(groups).map(([label, rows]) => ({ label,
-        value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }))
+      const items = Object.entries(groups).map(([label, rows0]) => { const rows = crFilter(label, rows0);
+        return { label, value: kpi.compute ? kpi.compute(rows) : kpi.agg(kpi.qualify ? rows.filter(kpi.qualify) : rows), target: repTarget(kpi, label) }; })
         .filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
       // On the All view, additive count/sum breakouts must tie to the headline. Rows whose breakout
       // rep is blank or off-roster are dropped from the named bars above, so fold that leftover into
@@ -3209,6 +3217,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r38 (Marketing lead-conversion by source & segmentation: Lead→Opp, Lead→Appt, Lead→ARIP as period ratios per Lead Source and per Marketing Segmentation, with a blended All row; ARIP joined to source/segment by Opportunity ID via the same opp-keyed union as the ICP funnel, coverage surfaced; no Sheets column changes)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r40 (Contract Review exclusion is now VP-aware: hero totals still count every appt; a rep's per-rep bar drops subject "Contract Review" only when the Created By is NOT a VP — a VP's own Contract Reviews stay in the VP breakout, while AM/Follow-Up/Listing Partner/off-roster drop them. Also incl. r38 Marketing lead-conversion by source & segmentation)</p>
   </>);
 }
