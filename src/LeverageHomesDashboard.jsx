@@ -2115,6 +2115,162 @@ function DispositionsView({ store, range, dir }) {
     </div>);
 }
 
+// ── VP FOCUS (drilldown) ─────────────────────────────────────────────────────────────────────────────
+// Consolidated section shown at the TOP of the Sales view whenever the scope is the VP team or a single VP.
+// Verified live: appointment Event Type = "In Person Appointment" / "Virtual Appointment" / "Follow Up
+// Appointment" (mutually exclusive), attendee = Assigned, setter = Created By, dated by Start; call subjects
+// are "Outgoing Call …" / "Incoming Call …". Appointments carry Opportunity Name (not ID), so appt→ARIP is a
+// name-join against the set of opps that ever reached ARIP. Team scope pools every VP → rates read blended,
+// counts as totals; a single VP shows just that VP.
+const VP_APPT_TYPES = [
+  { key: "ip",      label: "In Person", test: (e) => /in person/i.test(e) },
+  { key: "virtual", label: "Virtual",   test: (e) => /virtual/i.test(e) },
+  { key: "fu",      label: "Follow Up", test: (e) => /follow.?up/i.test(e) },
+];
+const vpApptType = (r) => { const e = String(r.eventType ?? ""); const m = VP_APPT_TYPES.find((t) => t.test(e)); return m ? m.key : "other"; };
+// "1 in N" label for an appts→ARIP ratio (appointments per ARIP).
+const ratio1inN = (arips, appts) => (arips > 0 ? `1 in ${(appts / arips).toFixed(1).replace(/\.0$/, "")}` : "—");
+function VpStat({ label, value, sub, tone }) {
+  const c = tone === "good" ? T.good : tone === "bad" ? T.bad : T.ink;
+  return (<div className="rounded-xl p-3.5 flex flex-col gap-1" style={{ background: T.canvas, border: `1px solid ${T.border}` }}>
+    <div className="text-[10.5px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.05em" }}>{label}</div>
+    <div className="text-[24px] font-bold leading-none tracking-tight" style={{ color: c, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    {sub && <div className="text-[11px] leading-snug" style={{ color: T.sub }}>{sub}</div>}
+  </div>);
+}
+// Rows of appts→ARIP ratios (used for the by-setter and by-type breakdowns). Bar scales to the appt count.
+function VpRatioRows({ rows, labelKey }) {
+  const maxA = Math.max(1, ...rows.map((r) => r.appts));
+  if (!rows.some((r) => r.appts)) return <div className="text-[12px]" style={{ color: T.faint }}>No appointments in scope.</div>;
+  return (<div className="flex flex-col gap-2">
+    {rows.map((r) => (
+      <div key={r[labelKey]} className="flex items-center gap-3" style={{ opacity: r.appts ? 1 : 0.4 }}>
+        <div className="text-[12px] shrink-0 truncate" style={{ width: 118, color: T.sub }} title={r[labelKey]}>{r[labelKey]}</div>
+        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 200 }}><div style={{ width: `${Math.round((r.appts / maxA) * 100)}%`, height: "100%", background: T.accent }} /></div>
+        <div className="text-right shrink-0" style={{ width: 172, fontVariantNumeric: "tabular-nums" }}>
+          <span className="text-[13px] font-semibold" style={{ color: T.ink }}>{ratio1inN(r.arips, r.appts)}</span>
+          <span className="text-[11px]" style={{ color: T.faint }}> · {r.appts}→{r.arips} · {r.appts ? Math.round((r.arips / r.appts) * 100) : 0}%</span>
+        </div>
+      </div>))}
+  </div>);
+}
+function VpBlock({ n, title, note, children }) {
+  return (<div className="flex flex-col gap-2.5">
+    <div className="flex items-baseline gap-2">
+      <span className="text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: T.accentSoft, color: T.accent }}>{n}</span>
+      <span className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: T.sub, letterSpacing: "0.05em" }}>{title}</span>
+      {note && <span className="text-[11px]" style={{ color: T.faint }}>{note}</span>}
+    </div>
+    {children}
+  </div>);
+}
+function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
+  const vpSet = useMemo(() => repsInScope(dir, org) || new Set(), [dir, org]);
+  const inVp = (r) => vpSet.has(String(r.rep ?? "").trim());
+  const inWin = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
+  // Opps that ever reached ARIP, by normalized Opportunity Name (appts carry Name, not ID).
+  const aripNames = useMemo(() => {
+    const s = new Set();
+    (store.arip_entered || []).forEach((r) => { const n = normName(r.name); if (n) s.add(n); });
+    (store.stage_history || []).forEach((r) => { if (String(r.newValue ?? "").trim() === "Arip") { const n = normName(r.name); if (n) s.add(n); } });
+    return s;
+  }, [store]);
+  const isArip = (r) => aripNames.has(normName(r.name));
+  // VP appointments (attendee = Assigned ∈ VP scope), windowed by Start.
+  const appts = useMemo(() => (store.appointments_attended || []).filter((r) => inVp(r) && inWin(r.date)), [store, vpSet, range]);
+  const attended = useMemo(() => appts.filter((r) => apptAttended(r.outcome)), [appts]);
+  // #1 Assigned → ARIP: all assigned appts, hero ratio + breakout by setter (Created By).
+  const assigned = useMemo(() => {
+    const opps = new Set(appts.filter(isArip).map((r) => normName(r.name)));
+    const by = {};
+    appts.forEach((r) => { const s = String(r.createdBy ?? "").trim() || "(unset)";
+      const b = by[s] = by[s] || { setter: s, appts: 0, opps: new Set() }; b.appts++; if (isArip(r)) b.opps.add(normName(r.name)); });
+    return { appts: appts.length, arips: opps.size, rows: Object.values(by).map((b) => ({ setter: b.setter, appts: b.appts, arips: b.opps.size })).sort((a, b) => b.appts - a.appts) };
+  }, [appts, aripNames]);
+  // #2 Attended → ARIP by type.
+  const attByType = useMemo(() => {
+    const mk = (rows) => ({ appts: rows.length, arips: new Set(rows.filter(isArip).map((r) => normName(r.name))).size });
+    return { rows: VP_APPT_TYPES.map((t) => ({ ...t, ...mk(attended.filter((r) => vpApptType(r) === t.key)) })), overall: mk(attended) };
+  }, [attended, aripNames]);
+  // #3 Self-Set by type (VP is both setter and attendee).
+  const selfSet = useMemo(() => {
+    const ss = appts.filter((r) => normName(r.createdBy) && normName(r.createdBy) === normName(r.rep));
+    return { total: ss.length, byType: VP_APPT_TYPES.map((t) => ({ ...t, value: ss.filter((r) => vpApptType(r) === t.key).length })) };
+  }, [appts]);
+  // #4 Show Rate by type (Met ÷ scheduled; excl. cancelled/rescheduled).
+  const showByType = useMemo(() => {
+    const mk = (rows) => { const den = rows.filter((r) => !apptExcluded(r.outcome)); const met = den.filter((r) => apptAttended(r.outcome)).length; return { sched: den.length, met, rate: den.length ? met / den.length : null }; };
+    return { rows: VP_APPT_TYPES.map((t) => ({ ...t, ...mk(appts.filter((r) => vpApptType(r) === t.key)) })), overall: mk(appts) };
+  }, [appts]);
+  // #5 ARIP → Deal Review % (VP-scoped stage history; cohort entered ARIP in window; reached Deal Review).
+  const aripToDR = useMemo(() => {
+    const rows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
+    const closedSet = new Set((store.closed_opps || []).map((r) => String(r.id ?? "").trim()).filter(Boolean));
+    const agg = stageOppAgg(rows, closedSet);
+    let cohort = 0, adv = 0;
+    agg.forEach((o) => { if (!enteredInRange(o, "Arip", range)) return; cohort++; if (reachedStage(o, "Deal Review")) adv++; });
+    return { cohort, adv, rate: cohort ? adv / cohort : null };
+  }, [store, org, range, dir]);
+  // #6 Contracts Sent, #8 Pipeline forecast, #9 Closed revenue (reuse the KPI compute path at VP scope).
+  const contracts = useMemo(() => computeKpi(KPIS.contracts_sent, store, dir, org, range, range).value || 0, [store, dir, org, range]);
+  const pipeline = useMemo(() => computeKpi(KPIS.pipeline_forecast, store, dir, org, rangeFwd, rangeFwd).value || 0, [store, dir, org, rangeFwd]);
+  const closedRev = useMemo(() => computeKpi(KPIS.closed_revenue, store, dir, org, range, range).value || 0, [store, dir, org, range]);
+  // #7 Call activity — VP's own OUTBOUND calls (subject "Outgoing …").
+  const calls = useMemo(() => {
+    const rows = applyFilters(store.calls || [], DATASETS.calls, org, range, dir).filter((r) => /outgoing/i.test(String(r.subject ?? "")));
+    const mins = rows.reduce((s, r) => s + num(r.durationMin), 0);
+    return { calls: rows.length, minutes: mins, qcs: rows.filter(isQC).length, avgSec: rows.length ? (mins / rows.length) * 60 : 0 };
+  }, [store, org, range, dir]);
+
+  const typeRatioRows = attByType.rows.concat([{ key: "all", label: "All types", appts: attByType.overall.appts, arips: attByType.overall.arips }]);
+  const pct = (x) => (x == null ? "—" : (x * 100).toFixed(1) + "%");
+  return (
+    <div className="rounded-2xl p-4 sm:p-5 flex flex-col gap-5" style={{ background: T.card, border: `1px solid ${T.accent}`, boxShadow: T.shadow }}>
+      <div className="flex items-center gap-2.5">
+        <div className="w-1.5 h-7 rounded-sm" style={{ background: T.accent }} />
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-bold" style={{ color: T.ink }}>VP Focus · <span style={{ color: T.accent }}>{drillLabel}</span></div>
+          <div className="text-[11px]" style={{ color: T.faint }}>Appointment funnel, conversion & output for {vpSet.size > 1 ? `${vpSet.size} VPs (blended)` : "this VP"} · appointments dated by Start · ARIP matched by opportunity name</div>
+        </div>
+        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
+      </div>
+
+      <VpBlock n="1" title="Appts assigned → ARIP" note="every appointment routed to the VP · hero = VP total · broken out by who set it">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-1">
+          <div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{ratio1inN(assigned.arips, assigned.appts)}</div>
+          <div className="text-[12px] pb-1" style={{ color: T.sub }}>{assigned.appts.toLocaleString()} assigned → {assigned.arips.toLocaleString()} ARIP · <span style={{ color: T.ink, fontWeight: 600 }}>{assigned.appts ? Math.round((assigned.arips / assigned.appts) * 100) : 0}%</span></div>
+        </div>
+        <VpRatioRows rows={assigned.rows} labelKey="setter" />
+      </VpBlock>
+
+      <VpBlock n="2" title="Appts attended → ARIP" note="met appointments only · by appointment type">
+        <VpRatioRows rows={typeRatioRows} labelKey="label" />
+      </VpBlock>
+
+      <VpBlock n="3" title="Self-set appointments" note="VP set it and attended it · by type">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {selfSet.byType.map((t) => <VpStat key={t.key} label={t.label} value={t.value.toLocaleString()} />)}
+          <VpStat label="Total self-set" value={selfSet.total.toLocaleString()} tone="good" />
+        </div>
+      </VpBlock>
+
+      <VpBlock n="4" title="Show rate" note="met ÷ scheduled · excl. cancelled & rescheduled · by type">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {showByType.rows.map((t) => <VpStat key={t.key} label={t.label} value={pct(t.rate)} sub={`${t.met}/${t.sched} met`} />)}
+          <VpStat label="Overall" value={pct(showByType.overall.rate)} sub={`${showByType.overall.met}/${showByType.overall.sched} met`} tone="good" />
+        </div>
+      </VpBlock>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <VpStat label="5 · ARIP → Deal Review" value={pct(aripToDR.rate)} sub={aripToDR.cohort ? `${aripToDR.adv}/${aripToDR.cohort} advanced` : "no ARIP cohort"} tone="good" />
+        <VpStat label="6 · Contracts Sent" value={contracts.toLocaleString()} />
+        <VpStat label="7 · Talk Time" value={fmt(calls.minutes, "minutes")} sub={`${calls.calls.toLocaleString()} outbound calls`} />
+        <VpStat label="7 · QCs" value={calls.qcs.toLocaleString()} sub={`avg call ${fmtDur(calls.avgSec)}`} />
+        <VpStat label="8 · Pipeline (forecast)" value={fmt(pipeline, "currency")} />
+        <VpStat label="9 · Closed Revenue" value={fmt(closedRev, "currency")} tone="good" />
+      </div>
+    </div>);
+}
 function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
@@ -2131,6 +2287,11 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
   const orgFiltered = org.company !== "All" || org.department !== "All" || org.team !== "All" || org.role !== "All" || org.rep !== "All";
   const showVpMetrics = !orgFiltered || isVpScope(dir, org); // VP-only KPIs: company roll-up (All) + VP drilldowns; hidden for AM/Follow-Up scopes
+  // VP drilldown: the new consolidated VP Focus section renders at the top of the Sales view, and the tiles it
+  // absorbs are dropped from the grids/panels below to de-clutter (the section is now the source of truth for them).
+  const vpDrill = !isMktView && !isTxView && isVpScope(dir, org);
+  const VP_SECTION_IDS = new Set(["appts_attended", "show_rate", "contracts_sent", "calls", "talk_time", "qcs", "pipeline_forecast", "closed_revenue"]);
+  const dropVp = (id) => vpDrill && VP_SECTION_IDS.has(id);
   const showAmFuMetrics = !orgFiltered || isAmFuScope(dir, org); // AM/Follow-Up-only KPIs: company roll-up + AM/FU drilldowns; hidden for VP scopes
   const allCards = ["closed_revenue", "deals_closed", "avg_deal", "pipeline_forecast", "opps_created", "appointments", "appts_attended", "show_rate", "avg_icp_per_appt", "opps_to_arip", "arip_dealreview", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract", "contracts_sent", "leads", "leads_claimed", "leads_deaded", "leads_call_center", "leads_texting", "leads_website", "leads_direct_mail", "leads_ppl", "reactivated_leads", "mkt_opps_created", "avg_lead_icp", "opps_assigned", "opps_deaded", "calls", "talk_time", "qcs", "live_transfers_attempted", "live_transfers_connected"];
   const cards = isTxView ? ["deals_closed", "closed_revenue", "avg_deal", "pipeline_forecast", "arip_pullthrough", "rev_out_of_arip", "rev_to_buyer_arip", "rev_to_under_contract"]
@@ -2142,8 +2303,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         if (KPIS[id].amFuOnly && !showAmFuMetrics) return false; // AM/Follow-Up-only metrics
         return true;
       });
-  const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
-  const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics));
+  const salesLagging = CARD_TIERS.lagging.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics) && !dropVp(id));
+  const salesLeading = CARD_TIERS.leading.filter((id) => KPIS[id] && (!KPIS[id].vpOnly || showVpMetrics) && (!KPIS[id].amFuOnly || showAmFuMetrics) && !dropVp(id));
   const CALL_IDS = ["calls", "talk_time", "qcs"];
   const salesLeadingActivity = salesLeading.filter((id) => !CALL_IDS.includes(id));
   const salesLeadingCall = salesLeading.filter((id) => CALL_IDS.includes(id));
@@ -2656,8 +2817,9 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   return (<div className="flex flex-col gap-5">
     {txSubToggle}
     {(!isTxView && !isMktView) ? (<>
-      <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
-        label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />
+      {vpDrill && <VpFocus store={store} dir={dir} org={org} range={range} rangeFwd={rangeFwd} drillLabel={drillLabel} />}
+      {!vpDrill && <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
+        label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />}
       <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
       <CardGrid big ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
       <SubHead label="Leading indicators" note="activities that drive those results" />
@@ -3048,7 +3210,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
       </Panel>
     </>) : (<>
-    <Panel collapsible title="Appointments">
+    {!vpDrill && (<Panel collapsible title="Appointments">
       <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
         {[["showrate", "Show Rate"], ["funnel", "Appt → ARIP"], ["outcomes", "Outcomes"], ["breakout", "Breakout"]].map(([v, l]) => (
           <button key={v} onClick={() => setApptTab(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
@@ -3088,7 +3250,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <ApptRoleSection store={store} dir={dir} org={org} range={range} part="breakout" />
       </div>
       )}
-    </Panel>
+    </Panel>)}
     {(
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <Panel collapsible title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
@@ -3256,6 +3418,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r43 (Renamed the Transactions sub-tab "Transaction Coordination" → "Coordination"; added top-margin spacing above the Data notes panel on every page. Incl. r42 Underwriting tab + Field Operations sub-tab scaffolding, r41 "KPI Targets by Role" format)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r44 (VP drilldown: new consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
   </>);
 }
