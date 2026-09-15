@@ -546,7 +546,12 @@ function buildSample() {
     ["Ray O'Donnell", "Vice President", "Vice Presidents", "Sales"],
     ["Joey Szal", "Vice President", "Vice Presidents", "Sales"],
     ["Sam Dogbe", "Vice President", "Vice Presidents", "Sales"],
-    ["Brendan Da Silva", "Realtor", "Da Silva Team", "Listing Partner"],
+    ["Brendan Da Silva", "Listing Partner", "Listing Partners", "Sales"],
+    ["Brian Clarke", "Listing Partner", "Listing Partners", "Sales"],
+    ["Sharif Fouda", "Disposition Manager", "Disposition Managers", "Dispositions"],
+    ["Michellade Campugan", "Dispositions Associate", "Dispositions Associates", "Dispositions"],
+    ["Renee Bain", "Transactions Coordinator", "Transactions Coordinators", "Transactions"],
+    ["Patrick Edrosolo", "Underwriter", "Underwriters", "Underwriting"],
   ].map(([rep, role, team, department]) => ({ REP: rep, ROLE: role, TEAM: team, Department: department }));
   const targets = [
     { KPI: "closed_revenue", Scope: "Company", "Scope Value": "Leverage Homes", Period: "Monthly", Target: 700000 },
@@ -776,6 +781,11 @@ const ALL_ORG = { company: "All", department: "All", team: "All", role: "All", r
 // Single source of truth: which views expose (and therefore apply) Team/Rep filtering.
 // Views that don't expose it must not silently honor a stale Team/Rep selection carried over from another view.
 const viewUsesRepFilter = (v) => v !== "speedtolead" && v !== "marketing";
+// Which directory Department(s) a tab's Team/Rep filter should offer, so each tab lists only its own org's
+// teams (the Sales tab shows Sales teams, not Dispositions/Transactions/Underwriting). Views not listed are
+// left department-agnostic on purpose — Marketing/Speed-to-Lead don't use the rep filter, and Transactions
+// spans Sales-owned deals + Dispositions, so it stays cross-department until its rep model is defined.
+const VIEW_DEPARTMENTS = { sales: ["Sales"], underwriting: ["Underwriting"] };
 const scopeOrgForView = (org, view) => viewUsesRepFilter(view) ? org : { ...org, team: "All", rep: "All" };
 // "Out of ARIP" = an opp whose ARIP New Value advanced to any active downstream stage.
 // One source of truth for the three ARIP-out KPIs (Deals Out of ARIP, Pull-Through, Revenue).
@@ -1291,9 +1301,10 @@ function MktConvTable({ data, labelHead }) {
       </table>
     </div>);
 }
-function orgOptions(dir, org) {
-  const people = dir.people || [];
-  if (!people.length) return dir.options;
+function orgOptions(dir, org, view) {
+  const allow = VIEW_DEPARTMENTS[view];
+  const people = (allow ? (dir.people || []).filter((p) => allow.includes(p.department)) : (dir.people || []));
+  if (!people.length) return allow ? { company: [], department: [], team: [], role: [], rep: [] } : dir.options;
   const uniq = (arr, f) => [...new Set(arr.map(f).filter(Boolean))].sort();
   const match = (p, keys) => keys.every((k) => k === "team" ? teamMatches(p, org.team) : (org[k] === "All" || p[k] === org[k]));
   const teamPool = people.filter((p) => match(p, ["company", "department"]));
@@ -1343,7 +1354,7 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
   const CHAIN = ["company", "team", "rep"];
   const set = (k) => (v) => { const next = { ...org, [k]: v };
     for (let i = CHAIN.indexOf(k) + 1; i < CHAIN.length; i++) next[CHAIN[i]] = "All"; setOrg(next); };
-  const opts = orgOptions(dir, org);
+  const opts = orgOptions(dir, org, view);
   const showRepFilters = viewUsesRepFilter(view); // Team/Rep are inert in those views
   const [open, setOpen] = useState(false); // mobile-only: filters collapsed by default to free screen
   const periodLabel = (DATE_PRESETS.find(([v]) => v === date.preset) || [null, date.preset])[1];
@@ -2121,42 +2132,44 @@ function DispositionsView({ store, range, dir }) {
 // Appointment" (mutually exclusive), attendee = Assigned, setter = Created By, dated by Start; call subjects
 // are "Outgoing Call …" / "Incoming Call …". ARIP is the count of the VP's own opps that ENTERED ARIP in the
 // same window (dated by Edit Date, deduped per opp) — a window count, NOT a name-join to each appointment's
-// opportunity. So a ratio like "1 in 6" = 6 appointments per ARIP that landed in the window. On the VP team
-// scope every metric shows a per-VP breakout; the headline blends/totals across the VPs.
+// opportunity. So a ratio like "1 in 6" = 6 appointments per ARIP that landed in the window. Both the assigned
+// and attended funnels carry a self-set vs assigned-by-others breakout. Team scope blends; per-VP table below.
 const VP_APPT_TYPES = [
   { key: "ip",      label: "In Person", test: (e) => /in person/i.test(e) },
   { key: "virtual", label: "Virtual",   test: (e) => /virtual/i.test(e) },
   { key: "fu",      label: "Follow Up", test: (e) => /follow.?up/i.test(e) },
 ];
 const vpApptType = (r) => { const e = String(r.eventType ?? ""); const m = VP_APPT_TYPES.find((t) => t.test(e)); return m ? m.key : "other"; };
-// "1 in N" label for an appts→ARIP ratio (appointments per ARIP).
-const ratio1inN = (arips, appts) => (arips > 0 ? `1 in ${(appts / arips).toFixed(1).replace(/\.0$/, "")}` : "—");
+// "1 in N" label for an appts→ARIP ratio (appointments per ARIP). Dash when either side is 0.
+const ratio1inN = (arips, appts) => (arips > 0 && appts > 0 ? `1 in ${(appts / arips).toFixed(1).replace(/\.0$/, "")}` : "—");
 const vpPct = (x) => (x == null ? "—" : (x * 100).toFixed(1) + "%");
-// Compute the full VP metric bundle for a given org scope (the whole VP team, or a single VP for the per-VP row).
+const vpShare = (part, total) => (total ? `${Math.round((part / total) * 100)}%` : "—");
+// Compute the full VP metric bundle for a given org scope (whole VP team, or one VP for the per-VP row).
 function vpMetricsFor(store, dir, org, range, rangeFwd) {
   const vpSet = repsInScope(dir, org) || new Set();
   const inVp = (r) => vpSet.has(String(r.rep ?? "").trim());
   const inWin = (d) => { if (!range) return true; const t = parseDate(d); return !!(t && t >= range.start && t <= range.end); };
-  const appts = (store.appointments_attended || []).filter((r) => inVp(r) && inWin(r.date)); // attendee = Assigned ∈ VP, dated by Start
+  const isSelf = (r) => { const c = normName(r.createdBy); return !!c && c === normName(r.rep); }; // VP set it for themselves
+  const appts = (store.appointments_attended || []).filter((r) => inVp(r) && inWin(r.date)); // attendee = Assigned ∈ VP, by Start
   const attended = appts.filter((r) => apptAttended(r.outcome));
-  // ARIPs in the SAME window, VP-scoped (owner) — distinct opps entering ARIP, dated by Edit Date. Window count,
-  // not tied to the appointments' own opps.
+  // ARIPs in the SAME window, VP-scoped (owner) — distinct opps entering ARIP (Edit Date). Window count.
   const arips = applyFilters(store.arip_entered || [], DATASETS.arip_entered, org, range, dir).length;
-  // #1 Assigned → ARIP: total appts assigned + who set them, with self-set (Created By == Assigned) distinguished.
-  const isSelf = (r) => { const c = normName(r.createdBy); return !!c && c === normName(r.rep); };
+  // #1 Assigned → ARIP: total + self-set/others split + who set them (by others).
   const selfSetAppts = appts.filter(isSelf);
   const bySetter = {};
   appts.filter((r) => !isSelf(r)).forEach((r) => { const s = String(r.createdBy ?? "").trim() || "(unset)"; bySetter[s] = (bySetter[s] || 0) + 1; });
   const setterRows = Object.entries(bySetter).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   const assigned = { appts: appts.length, arips, selfSet: selfSetAppts.length, byOthers: appts.length - selfSetAppts.length, setterRows };
-  // #2 Attended → ARIP by type (ratio = type appts ÷ window ARIPs).
-  const attByType = { rows: VP_APPT_TYPES.map((t) => ({ ...t, appts: attended.filter((r) => vpApptType(r) === t.key).length, arips })), overall: { appts: attended.length, arips } };
+  // #2 Attended → ARIP: by type + self-set/others split (ratio uses the shared window ARIP count).
+  const attSelf = attended.filter(isSelf).length;
+  const attByType = { rows: VP_APPT_TYPES.map((t) => ({ ...t, appts: attended.filter((r) => vpApptType(r) === t.key).length })), overall: { appts: attended.length } };
+  const attRouting = { self: attSelf, others: attended.length - attSelf };
   // #3 Self-set by type.
   const selfSet = { total: selfSetAppts.length, byType: VP_APPT_TYPES.map((t) => ({ ...t, value: selfSetAppts.filter((r) => vpApptType(r) === t.key).length })) };
   // #4 Show rate by type (met ÷ scheduled; excl. cancelled/rescheduled).
   const sr = (rows) => { const den = rows.filter((r) => !apptExcluded(r.outcome)); const met = den.filter((r) => apptAttended(r.outcome)).length; return { sched: den.length, met, rate: den.length ? met / den.length : null }; };
   const showByType = { rows: VP_APPT_TYPES.map((t) => ({ ...t, ...sr(appts.filter((r) => vpApptType(r) === t.key)) })), overall: sr(appts) };
-  // #5 ARIP → Deal Review % (VP-scoped stage history; cohort entered ARIP in window; reached Deal Review).
+  // #5 ARIP → Deal Review %.
   const shRows = applyFilters(store.stage_history || [], DATASETS.stage_history, org, null, dir);
   const closedSet = new Set((store.closed_opps || []).map((r) => String(r.id ?? "").trim()).filter(Boolean));
   const agg = stageOppAgg(shRows, closedSet);
@@ -2171,56 +2184,68 @@ function vpMetricsFor(store, dir, org, range, rangeFwd) {
   const callRows = applyFilters(store.calls || [], DATASETS.calls, org, range, dir).filter((r) => /outgoing/i.test(String(r.subject ?? "")));
   const cmins = callRows.reduce((s, r) => s + num(r.durationMin), 0);
   const calls = { calls: callRows.length, minutes: cmins, qcs: callRows.filter(isQC).length, avgSec: callRows.length ? (cmins / callRows.length) * 60 : 0 };
-  return { arips, assigned, attByType, selfSet, showByType, aripToDR, contracts, pipeline, closedRev, calls };
+  return { arips, assigned, attByType, attRouting, selfSet, showByType, aripToDR, contracts, pipeline, closedRev, calls };
 }
+// Small tile in the dashboard's card language.
 function VpStat({ label, value, sub, tone }) {
   const c = tone === "good" ? T.good : tone === "bad" ? T.bad : T.ink;
-  return (<div className="rounded-xl p-3.5 flex flex-col gap-1" style={{ background: T.canvas, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-xl p-3.5 flex flex-col gap-1.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="text-[10.5px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.05em" }}>{label}</div>
-    <div className="text-[24px] font-bold leading-none tracking-tight" style={{ color: c, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    <div className="text-[22px] font-bold leading-none tracking-tight" style={{ color: c, fontVariantNumeric: "tabular-nums" }}>{value}</div>
     {sub && <div className="text-[11px] leading-snug" style={{ color: T.sub }}>{sub}</div>}
   </div>);
 }
-// Ratio rows (#2 attended → ARIP by type): appts bar + "1 in N · appts→arips · %".
-function VpRatioRows({ rows }) {
-  const maxA = Math.max(1, ...rows.map((r) => r.appts));
-  if (!rows.some((r) => r.appts)) return <div className="text-[12px]" style={{ color: T.faint }}>No appointments in scope.</div>;
-  return (<div className="flex flex-col gap-2">
-    {rows.map((r) => (
-      <div key={r.label} className="flex items-center gap-3" style={{ opacity: r.appts ? 1 : 0.4 }}>
-        <div className="text-[12px] shrink-0 truncate" style={{ width: 96, color: T.sub }} title={r.label}>{r.label}</div>
-        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 200 }}><div style={{ width: `${Math.round((r.appts / maxA) * 100)}%`, height: "100%", background: T.accent }} /></div>
-        <div className="text-right shrink-0" style={{ width: 172, fontVariantNumeric: "tabular-nums" }}>
-          <span className="text-[13px] font-semibold" style={{ color: T.ink }}>{ratio1inN(r.arips, r.appts)}</span>
-          <span className="text-[11px]" style={{ color: T.faint }}> · {r.appts}→{r.arips} · {r.appts ? Math.round((r.arips / r.appts) * 100) : 0}%</span>
+// Titled sub-card matching the dashboard tiles, with an optional number badge and right-slot.
+function VpCard({ n, title, hint, right, children }) {
+  return (<div className="rounded-xl p-4 flex flex-col gap-3.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start gap-2 min-w-0">
+        {n && <span className="text-[10px] font-bold rounded px-1.5 py-0.5 shrink-0 mt-px" style={{ background: T.accentSoft, color: T.accent }}>{n}</span>}
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: T.sub, letterSpacing: "0.05em" }}>{title}</div>
+          {hint && <div className="text-[11px] mt-0.5" style={{ color: T.faint }}>{hint}</div>}
         </div>
-      </div>))}
-  </div>);
-}
-// Count bars (#1 who set the assigned appts); the self-set row is tagged and tinted distinctly.
-function VpCountBars({ rows }) {
-  const max = Math.max(1, ...rows.map((r) => r.value));
-  if (!rows.length || !rows.some((r) => r.value)) return <div className="text-[12px]" style={{ color: T.faint }}>No appointments in scope.</div>;
-  return (<div className="flex flex-col gap-2">
-    {rows.map((r) => (
-      <div key={r.label} className="flex items-center gap-3">
-        <div className="text-[12px] shrink-0 truncate flex items-center gap-1.5" style={{ width: 150, color: T.sub }} title={r.label}>
-          {r.tag && <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0" style={{ background: T.warnSoft, color: T.warn }}>{r.tag}</span>}
-          <span className="truncate">{r.label}</span>
-        </div>
-        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.track, maxWidth: 220 }}><div style={{ width: `${Math.round((r.value / max) * 100)}%`, height: "100%", background: r.tag ? T.warn : T.accent }} /></div>
-        <div className="text-[12px] text-right shrink-0" style={{ width: 54, fontVariantNumeric: "tabular-nums", color: T.ink }}>{r.value.toLocaleString()}</div>
-      </div>))}
-  </div>);
-}
-function VpBlock({ n, title, note, children }) {
-  return (<div className="flex flex-col gap-2.5">
-    <div className="flex items-baseline gap-2 flex-wrap">
-      <span className="text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: T.accentSoft, color: T.accent }}>{n}</span>
-      <span className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: T.sub, letterSpacing: "0.05em" }}>{title}</span>
-      {note && <span className="text-[11px]" style={{ color: T.faint }}>{note}</span>}
+      </div>
+      {right}
     </div>
     {children}
+  </div>);
+}
+// A labeled breakout group (a small caption + aligned rows) inside a card.
+function VpGroup({ label, rows, empty, extra }) {
+  const max = Math.max(1, ...rows.map((r) => r.value || 0));
+  return (<div className="flex flex-col gap-2 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
+    <div className="text-[10px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.06em" }}>{label}</div>
+    {rows.length ? (<div className="flex flex-col gap-2">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 shrink-0" style={{ width: 108 }}>
+            {r.tag && <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0" style={{ background: T.accentSoft, color: T.accent }}>{r.tag}</span>}
+            <span className="text-[12px] truncate" style={{ color: T.sub }} title={r.label}>{r.label}</span>
+          </div>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(((r.value || 0) / max) * 100)}%`, height: "100%", background: T.accent }} /></div>
+          <div className="text-[13px] text-right shrink-0" style={{ width: 36, color: T.ink, fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>{(r.value || 0).toLocaleString()}</div>
+          <div className="text-[11px] text-right shrink-0" style={{ width: r.wide ? 112 : 44, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{r.right}</div>
+        </div>))}
+    </div>) : <div className="text-[12px]" style={{ color: T.faint }}>{empty || "None in scope."}</div>}
+    {extra}
+  </div>);
+}
+// Inline stat columns with dividers (Show rate / Self-set), last item emphasized.
+function VpStatColumns({ items }) {
+  return (<div className="flex flex-wrap gap-y-3">
+    {items.map((it, i) => (
+      <div key={it.label} className="flex flex-col gap-1 pl-5 pr-5 first:pl-0" style={{ borderLeft: i > 0 ? `1px solid ${T.border}` : "none", minWidth: 104 }}>
+        <span className="text-[10.5px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.04em" }}>{it.label}</span>
+        <span className="text-[22px] font-bold leading-none tracking-tight" style={{ color: it.tone === "good" ? T.good : T.ink, fontVariantNumeric: "tabular-nums" }}>{it.value}</span>
+        {it.sub && <span className="text-[11px]" style={{ color: T.sub }}>{it.sub}</span>}
+      </div>))}
+  </div>);
+}
+function VpRatio({ arips, appts, unit }) {
+  return (<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <span className="text-[32px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{ratio1inN(arips, appts)}</span>
+    <span className="text-[11px]" style={{ color: T.faint }}>{appts.toLocaleString()} {unit} → {arips.toLocaleString()} ARIP · {appts ? Math.round((arips / appts) * 100) : 0}%</span>
   </div>);
 }
 // Per-VP table (team scope only): one row per VP, headline value for every metric.
@@ -2262,44 +2287,47 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
   const vps = useMemo(() => [...(repsInScope(dir, org) || new Set())].sort(), [dir, org]);
   const b = useMemo(() => vpMetricsFor(store, dir, org, range, rangeFwd), [store, dir, org, range, rangeFwd]);
   const perVp = useMemo(() => (vps.length > 1 ? vps.map((vp) => ({ vp, m: vpMetricsFor(store, dir, { ...ALL_ORG, rep: vp }, range, rangeFwd) })) : []), [store, dir, vps, range, rangeFwd]);
-  const attRows = b.attByType.rows.concat([{ key: "all", label: "All types", appts: b.attByType.overall.appts, arips: b.attByType.overall.arips }]);
-  const setterBars = (b.assigned.selfSet > 0 ? [{ label: "Set for self", value: b.assigned.selfSet, tag: "SELF" }] : []).concat(b.assigned.setterRows);
+  const live = <span className="text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>;
+  const setterExtra = b.assigned.setterRows.length > 7 ? <div className="text-[11px]" style={{ color: T.faint }}>+{b.assigned.setterRows.length - 7} more setters</div> : null;
   return (
-    <div className="rounded-2xl p-4 sm:p-5 flex flex-col gap-5" style={{ background: T.card, border: `1px solid ${T.accent}`, boxShadow: T.shadow }}>
+    <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2.5">
-        <div className="w-1.5 h-7 rounded-sm" style={{ background: T.accent }} />
+        <div className="w-1 h-6 rounded-sm" style={{ background: T.accent }} />
         <div className="flex-1 min-w-0">
-          <div className="text-[15px] font-bold" style={{ color: T.ink }}>VP Focus · <span style={{ color: T.accent }}>{drillLabel}</span></div>
-          <div className="text-[11px]" style={{ color: T.faint }}>Appointment funnel, conversion & output for {vps.length > 1 ? `${vps.length} VPs (blended · per-VP below)` : "this VP"} · appts dated by Start · ARIP = the VP's opps entering ARIP in the same window</div>
+          <div className="text-[13px] font-bold uppercase tracking-wide" style={{ color: T.ink, letterSpacing: "0.06em" }}>VP Focus · <span style={{ color: T.accent }}>{drillLabel}</span></div>
+          <div className="text-[11px]" style={{ color: T.faint }}>Appointment funnel, conversion &amp; output{vps.length > 1 ? ` · ${vps.length} VPs blended (per-VP below)` : ""} · appts by Start · ARIP = the VP's opps entering ARIP in the same window</div>
         </div>
-        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
+        {live}
       </div>
 
-      <VpBlock n="1" title="Appts assigned → ARIP" note="every appointment routed to the VP · hero = assigned ÷ ARIPs · who set it (self-set flagged)">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-1">
-          <div className="text-[34px] font-bold leading-none tracking-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{ratio1inN(b.arips, b.assigned.appts)}</div>
-          <div className="text-[12px] pb-1" style={{ color: T.sub }}>{b.assigned.appts.toLocaleString()} assigned ({b.assigned.byOthers.toLocaleString()} by others · {b.assigned.selfSet.toLocaleString()} self-set) → {b.arips.toLocaleString()} ARIP</div>
-        </div>
-        <VpCountBars rows={setterBars} />
-      </VpBlock>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <VpCard n="1" title="Appts assigned → ARIP" hint="every appointment routed to the VP · ratio = assigned ÷ ARIPs" right={live}>
+          <VpRatio arips={b.arips} appts={b.assigned.appts} unit="assigned" />
+          <VpGroup label="Routing" rows={[
+            { label: "Set for self", tag: "SELF", value: b.assigned.selfSet, right: vpShare(b.assigned.selfSet, b.assigned.appts) },
+            { label: "By others", value: b.assigned.byOthers, right: vpShare(b.assigned.byOthers, b.assigned.appts) },
+          ]} />
+          <VpGroup label="Who set them · by others" rows={b.assigned.setterRows.slice(0, 7)} empty="No externally-set appointments." extra={setterExtra} />
+        </VpCard>
 
-      <VpBlock n="2" title="Appts attended → ARIP" note="met appointments · by type · ratio = appts ÷ ARIPs in window">
-        <VpRatioRows rows={attRows} />
-      </VpBlock>
+        <VpCard n="2" title="Appts attended → ARIP" hint="met appointments · ratio = appts ÷ ARIPs in window" right={live}>
+          <VpRatio arips={b.arips} appts={b.attByType.overall.appts} unit="met" />
+          <VpGroup label="By type" rows={b.attByType.rows.map((t) => ({ label: t.label, value: t.appts, wide: true, right: t.appts ? `${ratio1inN(b.arips, t.appts)} · ${Math.round((b.arips / t.appts) * 100)}%` : "—" }))} />
+          <VpGroup label="Routing" rows={[
+            { label: "Set for self", tag: "SELF", value: b.attRouting.self, right: vpShare(b.attRouting.self, b.attByType.overall.appts) },
+            { label: "By others", value: b.attRouting.others, right: vpShare(b.attRouting.others, b.attByType.overall.appts) },
+          ]} />
+        </VpCard>
+      </div>
 
-      <VpBlock n="3" title="Self-set appointments" note="VP set it and attended it · by type">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {b.selfSet.byType.map((t) => <VpStat key={t.key} label={t.label} value={t.value.toLocaleString()} />)}
-          <VpStat label="Total self-set" value={b.selfSet.total.toLocaleString()} tone="good" />
-        </div>
-      </VpBlock>
-
-      <VpBlock n="4" title="Show rate" note="met ÷ scheduled · excl. cancelled & rescheduled · by type">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {b.showByType.rows.map((t) => <VpStat key={t.key} label={t.label} value={vpPct(t.rate)} sub={`${t.met}/${t.sched} met`} />)}
-          <VpStat label="Overall" value={vpPct(b.showByType.overall.rate)} sub={`${b.showByType.overall.met}/${b.showByType.overall.sched} met`} tone="good" />
-        </div>
-      </VpBlock>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <VpCard n="3" title="Self-set appointments" hint="VP set it and attended it · by type">
+          <VpStatColumns items={[...b.selfSet.byType.map((t) => ({ label: t.label, value: t.value.toLocaleString() })), { label: "Total", value: b.selfSet.total.toLocaleString(), tone: "good" }]} />
+        </VpCard>
+        <VpCard n="4" title="Show rate" hint="met ÷ scheduled · excl. cancelled &amp; rescheduled">
+          <VpStatColumns items={[...b.showByType.rows.map((t) => ({ label: t.label, value: vpPct(t.rate), sub: `${t.met}/${t.sched} met` })), { label: "Overall", value: vpPct(b.showByType.overall.rate), sub: `${b.showByType.overall.met}/${b.showByType.overall.sched} met`, tone: "good" }]} />
+        </VpCard>
+      </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <VpStat label="5 · ARIP → Deal Review" value={vpPct(b.aripToDR.rate)} sub={b.aripToDR.cohort ? `${b.aripToDR.adv}/${b.aripToDR.cohort} advanced` : "no ARIP cohort"} tone="good" />
@@ -2311,10 +2339,9 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
       </div>
 
       {perVp.length > 0 && (
-        <div className="flex flex-col gap-2.5 pt-1" style={{ borderTop: `1px solid ${T.border}` }}>
-          <span className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: T.sub, letterSpacing: "0.05em" }}>Per-VP breakout</span>
+        <VpCard title="Per-VP breakout" hint="headline for every metric, by VP">
           <VpPerVpTable perVp={perVp} />
-        </div>)}
+        </VpCard>)}
     </div>);
 }
 
@@ -3423,6 +3450,19 @@ export default function App() {
       catch (e) { if (alive) setSt((s) => ({ ...s, loading: false, error: String(e.message || e) })); } })();
     return () => { alive = false; }; }, []);
 
+  // When the tab changes, drop any Team/Rep selection that doesn't belong to the new tab's department(s),
+  // so a filter carried over from another tab never lingers as a stale (and now unlisted) value.
+  useEffect(() => {
+    const dir = st.dir; if (!dir || !dir.people) return;
+    const allow = VIEW_DEPARTMENTS[view]; if (!allow) return;
+    setOrg((o) => {
+      const teamOK = o.team === "All" || (o.team === TEAM_AMFU ? allow.includes("Sales") : dir.people.some((p) => p.team === o.team && allow.includes(p.department)));
+      const repOK = o.rep === "All" || dir.people.some((p) => p.rep === o.rep && allow.includes(p.department));
+      if (teamOK && repOK) return o;
+      return { ...o, team: teamOK ? o.team : "All", rep: repOK ? o.rep : "All" };
+    });
+  }, [view, st.dir]);
+
   // Self-labeling subtitle: show the active rep/team scope so a printed/exported page is unambiguous.
   // Marketing & Speed-to-Lead ignore Team/Rep (company-wide), so we don't show a rep scope there.
   const scopeText = viewUsesRepFilter(view)
@@ -3465,6 +3505,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r45 (VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r47 (VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
   </>);
 }
