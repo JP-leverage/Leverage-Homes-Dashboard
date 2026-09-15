@@ -556,6 +556,10 @@ function buildSample() {
     { KPI: "appointments", Scope: "Company", "Scope Value": "Leverage Homes", Period: "Monthly", Target: 90 },
     { KPI: "leads", Scope: "Company", "Scope Value": "Leverage Homes", Period: "Monthly", Target: 700 },
     { KPI: "calls", Scope: "Company", "Scope Value": "Leverage Homes", Period: "Monthly", Target: 2500 },
+    // Role-keyed targets in the new sheet shape: Scope Value = directory team-label, Period drives scaling.
+    { KPI: "appointments", Metric: "Appointments Set", Scope: "Role", "Scope Value": "Acquisition Managers", Period: "Monthly", Target: 80 },
+    { KPI: "opps_created", Metric: "Opps Created", Scope: "Role", "Scope Value": "Acquisition Managers", Period: "Monthly", Target: 80 },
+    { KPI: "show_rate", Metric: "Show Rate", Scope: "Role", "Scope Value": "Acquisition Managers", Period: "Absolute", Target: 0.65 },
   ];
   return { opps_created, opps_closed, pipeline, appointments, leads, calls, directory, targets };
 }
@@ -1122,18 +1126,37 @@ const KPIS = {
   live_transfers_connected: { id: "live_transfers_connected", label: "Live Transfers Connected", dataset: "live_transfers", format: "number", domain: "marketing",
     targetKey: "live_transfers_connected", targetType: "volume", higherIsBetter: true, qualify: (r) => isYes(r.connected), agg: (rows) => rows.length },
 };
+// Scale a raw target to the selected period. The Targets sheet's Period column is authoritative:
+//   "Monthly"  -> scale by business-months in the window (a per-month goal spread across the period)
+//   "Absolute" -> never scaled (per-deal $, rates/decimals, segment-mix %, avg scores)
+//   "Max"      -> never scaled (a threshold, e.g. Speed to Lead ceiling)
+// If a row carries no recognized Period, fall back to the KPI's declared targetType (rate = unscaled).
+function targetScaleFactor(period, kpi, range) {
+  const p = String(period ?? "").trim().toLowerCase();
+  if (p === "absolute" || p === "max") return 1;
+  if (p === "monthly") return businessMonthsInRange(range.start, range.end);
+  return kpi.targetType === "rate" ? 1 : businessMonthsInRange(range.start, range.end);
+}
+// Role targets in the "KPI Targets by Role" sheet are keyed by the directory's team-style labels — plural,
+// with the Context typos preserved ("Acquistion Managers", "Follow up Speciliasts", "Vice Presidents",
+// "Listing Partners") — NOT the canonical role labels the filters use. So the row's Scope Value and the
+// current scope's role are both normalized through roleFromTeam before comparing, and a Team filter implies
+// its role. Blank/0 Target rows are skipped (not just the first match), so a more general scope (e.g. Company)
+// can still supply a target instead of nulling out at the most specific matching row.
 function resolveTarget(kpi, store, org, range) {
   const rows = (store.targets || []).filter((t) => t.kpiId === kpi.targetKey);
+  const roleWanted = org.role !== "All" ? org.role
+    : (org.team !== "All" && org.team !== TEAM_AMFU) ? roleFromTeam(org.team) : null; // synthetic AM+FU union has no single role
   const tries = [];
-  if (org.rep !== "All") tries.push(["Rep", org.rep]);
-  if (org.team !== "All") tries.push(["Team", org.team]);
-  if (org.role !== "All") tries.push(["Role", org.role]);
-  if (org.department !== "All") tries.push(["Department", org.department]);
-  tries.push(["Company", org.company === "All" ? "Leverage Homes" : org.company]);
-  let base = null;
-  for (const [scope, val] of tries) { const hit = rows.find((t) => t.scope === scope && t.scopeValue === val); if (hit) { base = num(hit.value); break; } }
-  if (!base) return null; // 0 / blank Column F -> treat as "no target set" rather than a $0 target
-  return kpi.targetType === "rate" ? base : base * businessMonthsInRange(range.start, range.end);
+  if (org.rep !== "All") tries.push((t) => t.scope === "Rep" && String(t.scopeValue).trim() === org.rep);
+  if (org.team !== "All") tries.push((t) => t.scope === "Team" && t.scopeValue === org.team); // direct team row if one is ever added
+  if (roleWanted) tries.push((t) => t.scope === "Role" && roleFromTeam(t.scopeValue) === roleWanted);
+  if (org.department !== "All") tries.push((t) => t.scope === "Department" && t.scopeValue === org.department);
+  tries.push((t) => t.scope === "Company" && t.scopeValue === (org.company === "All" ? "Leverage Homes" : org.company));
+  let hit = null;
+  for (const pred of tries) { const row = rows.find((t) => pred(t) && num(t.value)); if (row) { hit = row; break; } }
+  if (!hit) return null; // 0 / blank Column F -> treat as "no target set" rather than a $0 target
+  return num(hit.value) * targetScaleFactor(hit.period, kpi, range);
 }
 function computeKpi(kpi, store, dir, org, range, targetRange) {
   const ds = DATASETS[kpi.dataset];
@@ -2140,11 +2163,15 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     const tRows = store.targets || [];
     const repTarget = (kpi, label) => {
       if (!kpi.targetKey) return null;
-      const hit = tRows.find((t) => t.kpiId === kpi.targetKey && t.scope === "Rep" && String(t.scopeValue).trim() === label);
+      const rows = tRows.filter((t) => t.kpiId === kpi.targetKey);
+      // Prefer an explicit per-rep row; else fall back to the rep's ROLE target (the sheet keys targets by
+      // role), so each rep's bar is measured against their role goal. Role rows use directory team-labels →
+      // canonicalize both sides via roleFromTeam. Blank/0 rows are skipped so the "/ target" line just drops.
+      const role = dir.byRep[String(label).trim()]?.role;
+      let hit = rows.find((t) => t.scope === "Rep" && String(t.scopeValue).trim() === label && num(t.value));
+      if (!hit && role) hit = rows.find((t) => t.scope === "Role" && roleFromTeam(t.scopeValue) === role && num(t.value));
       if (!hit) return null;
-      const base = num(hit.value);
-      if (!base) return null; // blank Column F -> no per-rep target (drops the "/ 0" line)
-      return kpi.targetType === "rate" ? base : base * businessMonthsInRange(rangeFwd.start, rangeFwd.end);
+      return num(hit.value) * targetScaleFactor(hit.period, kpi, rangeFwd);
     };
     cards.forEach((id) => {
       const kpi = KPIS[id], ds = DATASETS[kpi.dataset], res = results[id];
@@ -3217,6 +3244,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-01 · v2-features-r40 (Contract Review exclusion is now VP-aware: hero totals still count every appt; a rep's per-rep bar drops subject "Contract Review" only when the Created By is NOT a VP — a VP's own Contract Reviews stay in the VP breakout, while AM/Follow-Up/Listing Partner/off-roster drop them. Also incl. r38 Marketing lead-conversion by source & segmentation)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r41 (Targets sheet upgraded to the "KPI Targets by Role" format: role targets keyed by directory team-labels — typos preserved — are canonicalized via roleFromTeam so a Role/Team filter now resolves; the Period column (Monthly / Absolute / Max) drives scaling instead of only targetType; per-rep bars fall back to the rep's role target; blank rows skip to the next-broader scope instead of nulling out. Incl. r40 VP-aware Contract Review exclusion)</p>
   </>);
 }
