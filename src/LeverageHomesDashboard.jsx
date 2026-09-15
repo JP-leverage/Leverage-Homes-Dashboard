@@ -1488,7 +1488,7 @@ function dataFreshness(store) {
 }
 function Notes({ diagnostics, mode, freshness }) {
   const fmtD = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return (<div className="rounded-xl p-4 mb-5" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
+  return (<div className="rounded-xl p-4 mb-5 mt-8 sm:mt-10" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
     <div className="text-[13px] font-semibold mb-1" style={{ color: T.warn }}>Data notes</div>
     <ul className="text-[12px] flex flex-col gap-1" style={{ color: T.ink }}>
       <li>Ten workbooks are wired: Opportunities (Pt 1 &amp; 2), Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Transactions, Speed to Lead, and Context (directory). Date filtering is active on every dataset that carries a date column.</li>
@@ -2642,7 +2642,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
 
   const txSubToggle = isTxView ? (
     <div className="inline-flex rounded-lg p-0.5 self-start" style={{ background: T.track }}>
-      {[["coordination", "Transaction Coordination"], ["dispositions", "Dispositions"], ["fieldops", "Field Operations"]].map(([v, l]) => (
+      {[["coordination", "Coordination"], ["dispositions", "Dispositions"], ["fieldops", "Field Operations"]].map(([v, l]) => (
         <button key={v} onClick={() => setTxSub(v)} className="text-[13px] font-medium px-3 py-1.5 rounded-md transition-colors whitespace-nowrap"
           style={{ background: txSub === v ? T.card : "transparent", color: txSub === v ? T.ink : T.sub, boxShadow: txSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
     </div>) : null;
@@ -3256,6 +3256,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r42 (Scaffolding: new top-level Underwriting tab — order is now Sales · Underwriting · Transactions · Marketing · Speed to Lead — and a new Field Operations sub-tab under Transactions. Both are intentionally blank placeholders for now. Incl. r41 "KPI Targets by Role" format: role targets keyed by directory team-labels are canonicalized via roleFromTeam so a Role/Team filter resolves; Period column drives scaling; per-rep bars fall back to the rep's role target)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r43 (Renamed the Transactions sub-tab "Transaction Coordination" → "Coordination"; added top-margin spacing above the Data notes panel on every page. Incl. r42 Underwriting tab + Field Operations sub-tab scaffolding, r41 "KPI Targets by Role" format)</p>
   </>);
 }
