@@ -1307,8 +1307,16 @@ function orgOptions(dir, org) {
     rep: uniq(people.filter((p) => match(p, ["company", "department", "team", "role"])), (p) => p.rep),
   };
 }
+// Blank-state placeholder for dashboard areas that are scaffolded but not yet wired to data.
+function ComingSoon({ title, note }) {
+  return (<div className="rounded-xl flex flex-col items-center justify-center text-center gap-2 p-10" style={{ background: T.card, border: `1px dashed ${T.border}`, minHeight: 240 }}>
+    <div className="w-2 h-6 rounded-sm mb-1" style={{ background: T.accent, opacity: 0.5 }} />
+    <div className="text-[15px] font-semibold" style={{ color: T.ink }}>{title}</div>
+    <div className="text-[12px] max-w-[440px] leading-relaxed" style={{ color: T.faint }}>{note}</div>
+  </div>);
+}
 function ViewToggle({ view, setView }) {
-  const tabs = [["sales", "Sales"], ["marketing", "Marketing"], ["transactions", "Transactions"], ["speedtolead", "Speed to Lead"]];
+  const tabs = [["sales", "Sales"], ["underwriting", "Underwriting"], ["transactions", "Transactions"], ["marketing", "Marketing"], ["speedtolead", "Speed to Lead"]];
   return (<div className="flex overflow-x-auto rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}`, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
     {tabs.map(([v, l]) => (
       <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3 sm:px-3.5 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0"
@@ -2627,19 +2635,23 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     return icpScoreFunnel(agg, range, closeById);
   }, [store, org, range, dir]);
 
+  if (view === "underwriting") return <ComingSoon title="Underwriting" note="Underwriting KPIs are coming soon — the tab is scaffolded and will fill in once its metrics and data source are defined." />;
   if (view === "speedtolead") return <SpeedToLeadView store={store} range={range} dir={dir} />;
   const lpName = lpScopeName(dir, org); // single Listing Partner selected → swap to their card set
   if (lpName) return <ListingPartnerView store={store} dir={dir} range={range} lp={lpName} />;
 
   const txSubToggle = isTxView ? (
     <div className="inline-flex rounded-lg p-0.5 self-start" style={{ background: T.track }}>
-      {[["coordination", "Transaction Coordination"], ["dispositions", "Dispositions"]].map(([v, l]) => (
+      {[["coordination", "Transaction Coordination"], ["dispositions", "Dispositions"], ["fieldops", "Field Operations"]].map(([v, l]) => (
         <button key={v} onClick={() => setTxSub(v)} className="text-[13px] font-medium px-3 py-1.5 rounded-md transition-colors whitespace-nowrap"
           style={{ background: txSub === v ? T.card : "transparent", color: txSub === v ? T.ink : T.sub, boxShadow: txSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
     </div>) : null;
 
   if (isTxView && txSub === "dispositions") return (
     <div className="flex flex-col gap-5">{txSubToggle}<DispositionsView store={store} range={range} dir={dir} /></div>);
+
+  if (isTxView && txSub === "fieldops") return (
+    <div className="flex flex-col gap-5">{txSubToggle}<ComingSoon title="Field Operations" note="Field Operations KPIs are coming soon — the sub-tab is scaffolded and will fill in once its metrics and data source are defined." /></div>);
 
   return (<div className="flex flex-col gap-5">
     {txSubToggle}
@@ -3244,6 +3256,6 @@ export default function App() {
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r41 (Targets sheet upgraded to the "KPI Targets by Role" format: role targets keyed by directory team-labels — typos preserved — are canonicalized via roleFromTeam so a Role/Team filter now resolves; the Period column (Monthly / Absolute / Max) drives scaling instead of only targetType; per-rep bars fall back to the rep's role target; blank rows skip to the next-broader scope instead of nulling out. Incl. r40 VP-aware Contract Review exclusion)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r42 (Scaffolding: new top-level Underwriting tab — order is now Sales · Underwriting · Transactions · Marketing · Speed to Lead — and a new Field Operations sub-tab under Transactions. Both are intentionally blank placeholders for now. Incl. r41 "KPI Targets by Role" format: role targets keyed by directory team-labels are canonicalized via roleFromTeam so a Role/Team filter resolves; Period column drives scaling; per-rep bars fall back to the rep's role target)</p>
   </>);
 }
