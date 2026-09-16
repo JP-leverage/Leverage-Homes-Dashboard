@@ -10,18 +10,22 @@ const API_KEY =
 
 const THEMES = {
   light: {
-    canvas: "#ECE3D0", card: "#FFFFFF", border: "#2B2721", ink: "#14110B",
-    sub: "#4B4535", faint: "#877C60", accent: "#A87C0A", accentSoft: "#F3E8CB",
-    good: "#0F6B4A", warn: "#9A5308", bad: "#A81729", track: "#E6DDC8", warnSoft: "#F6ECD6", bar: "#B7AB8B",
-    shadow: "0 2px 5px rgba(28,22,12,0.13), 0 1px 2px rgba(28,22,12,0.08)",
-    chart: ["#A87C0A", "#7A5C12", "#C9A227", "#14110B", "#5A5140", "#D9C68C", "#9A5308"],
+    canvas: "#EDF2F3", card: "#FFFFFF", border: "#DCE6E7", ink: "#0C2233",
+    sub: "#496271", faint: "#8AA1AD", accent: "#0E8C86", accentSoft: "#D9F0EC",
+    good: "#0E9E85", warn: "#B7791F", bad: "#CE4B5C", track: "#E7EEEF", warnSoft: "#FBF1DC", bar: "#B6CDCB",
+    border2: "#C4D3D4", rowHover: "rgba(14,140,134,0.055)", hoverShadow: "0 4px 14px rgba(12,34,51,0.10), 0 2px 6px rgba(12,34,51,0.06)",
+    shadow: "0 1px 3px rgba(12,34,51,0.07), 0 1px 2px rgba(12,34,51,0.04)",
+    grad: "linear-gradient(120deg, rgba(14,140,134,0.07), rgba(12,34,51,0.02))",
+    chart: ["#0E8C86", "#12A594", "#5EC9BC", "#0C2233", "#6E8A98", "#A7D9D1", "#B7791F"],
   },
   dark: {
-    canvas: "#0A0F1A", card: "#121A2A", border: "#25324A", ink: "#EAF1F8",
-    sub: "#A7B6C9", faint: "#6E7E93", accent: "#34C08C", accentSoft: "#123528",
-    good: "#34C08C", warn: "#E0A63E", bad: "#F2607F", track: "#1B2740", warnSoft: "#2A2214", bar: "#48586E",
+    canvas: "#081521", card: "#0F2334", border: "#20384C", ink: "#E7F1F3",
+    sub: "#9BB4C0", faint: "#617C8A", accent: "#26C6B4", accentSoft: "#123430",
+    good: "#2FD3A9", warn: "#E0A63E", bad: "#F2607F", track: "#152A3C", warnSoft: "#2A2214", bar: "#2B4257",
+    border2: "#2E4A66", rowHover: "rgba(38,198,180,0.08)", hoverShadow: "0 0 0 1px rgba(38,198,180,0.22)",
     shadow: "none",
-    chart: ["#34C08C", "#5FD3A8", "#8FE3C4", "#7FA0C9", "#A7B6C9", "#2E9E78", "#E0A63E"],
+    grad: "linear-gradient(120deg, rgba(38,198,180,0.10), rgba(8,21,33,0))",
+    chart: ["#26C6B4", "#5AD9C8", "#8FE7DA", "#7FA8C9", "#9BB4C0", "#1FA594", "#E0A63E"],
   },
 };
 let T = THEMES.light;
@@ -1327,7 +1331,7 @@ function orgOptions(dir, org, view) {
 }
 // Blank-state placeholder for dashboard areas that are scaffolded but not yet wired to data.
 function ComingSoon({ title, note }) {
-  return (<div className="rounded-xl flex flex-col items-center justify-center text-center gap-2 p-10" style={{ background: T.card, border: `1px dashed ${T.border}`, minHeight: 240 }}>
+  return (<div className="rounded-2xl flex flex-col items-center justify-center text-center gap-2 p-10" style={{ background: T.card, border: `1px dashed ${T.border}`, minHeight: 240 }}>
     <div className="w-2 h-6 rounded-sm mb-1" style={{ background: T.accent, opacity: 0.5 }} />
     <div className="text-[15px] font-semibold" style={{ color: T.ink }}>{title}</div>
     <div className="text-[12px] max-w-[440px] leading-relaxed" style={{ color: T.faint }}>{note}</div>
@@ -1335,10 +1339,10 @@ function ComingSoon({ title, note }) {
 }
 function ViewToggle({ view, setView }) {
   const tabs = [["sales", "Sales"], ["underwriting", "Underwriting"], ["transactions", "Transactions"], ["marketing", "Marketing"], ["speedtolead", "Speed to Lead"]];
-  return (<div className="flex overflow-x-auto rounded-lg p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}`, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+  return (<div className="flex overflow-x-auto rounded-xl p-0.5 mb-4" style={{ background: T.track, border: `1px solid ${T.border}`, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
     {tabs.map(([v, l]) => (
-      <button key={v} onClick={() => setView(v)} className="text-[13px] font-medium px-3 sm:px-3.5 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0"
-        style={{ background: view === v ? T.card : "transparent", color: view === v ? T.ink : T.sub, boxShadow: view === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+      <button key={v} onClick={() => setView(v)} className="lh-tab text-[13px] font-medium px-3 sm:px-3.5 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0"
+        style={{ background: view === v ? T.accentSoft : "transparent", color: view === v ? T.accent : T.sub, fontWeight: view === v ? 600 : 500, boxShadow: "none" }}>{l}</button>))}
   </div>);
 }
 function ThemeToggle({ mode, setMode }) {
@@ -1366,7 +1370,7 @@ function FilterBar({ org, setOrg, date, setDate, dir, view }) {
   const [open, setOpen] = useState(false); // mobile-only: filters collapsed by default to free screen
   const periodLabel = (DATE_PRESETS.find(([v]) => v === date.preset) || [null, date.preset])[1];
   const scopeLabel = !showRepFilters ? "Company" : org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : "All reps";
-  return (<div className="rounded-xl p-3 sm:p-4 mb-4 sm:mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="rounded-2xl p-3 sm:p-4 mb-4 sm:mb-5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <button onClick={() => setOpen((o) => !o)} className="sm:hidden w-full flex items-center justify-between">
       <span className="text-[13px]" style={{ color: T.sub }}>Filters · <span style={{ color: T.ink, fontWeight: 600 }}>{scopeLabel} · {periodLabel}</span></span>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}><path d="M6 9l6 6 6-6" stroke={T.faint} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -1443,7 +1447,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       </div>
     </div>);
   };
-  return (<div className={`rounded-xl ${D.cardPad} flex flex-col gap-3 h-full`} style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className={`lh-card rounded-2xl ${D.cardPad} flex flex-col gap-3 h-full`} style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
@@ -1486,9 +1490,9 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
 }
 function Panel({ title, children, collapsible }) {
   const [open, setOpen] = useState(true); // default expanded — a PDF export always captures full content
-  if (!collapsible) return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  if (!collapsible) return (<div className="lh-card rounded-2xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <h3 className="text-[13px] font-semibold mb-3" style={{ color: T.sub }}>{title}</h3>{children}</div>);
-  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="lh-card rounded-2xl p-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between" style={{ cursor: "pointer" }}>
       <h3 className="text-[13px] font-semibold" style={{ color: T.sub }}>{title}</h3>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6" stroke={T.faint} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -1508,7 +1512,7 @@ function dataFreshness(store) {
 }
 function Notes({ diagnostics, mode, freshness }) {
   const fmtD = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return (<div className="rounded-xl p-4 mb-5 mt-8 sm:mt-10" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
+  return (<div className="rounded-2xl p-4 mb-5 mt-8 sm:mt-10" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33` }}>
     <div className="text-[13px] font-semibold mb-1" style={{ color: T.warn }}>Data notes</div>
     <ul className="text-[12px] flex flex-col gap-1" style={{ color: T.ink }}>
       <li>Ten workbooks are wired: Opportunities (Pt 1 &amp; 2), Pipeline, Activities (appointments), Marketing (lead volume), Leads (per-rep claims), Tasks (calls), Transactions, Speed to Lead, and Context (directory). Date filtering is active on every dataset that carries a date column.</li>
@@ -1571,7 +1575,7 @@ function StlHero({ title, caption, rows, big, target }) {
     <div><div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: T.faint }}>{label}</div>
       <div className="flex flex-col gap-1.5">{items.map((i) => <Row key={i.label} {...i} />)}</div></div>);
   return (
-    <div className="rounded-xl p-5 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+    <div className="rounded-2xl p-5 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
       <div className="flex items-center gap-2">
         <span className="text-[13px] font-medium" style={{ color: T.sub }}>{title}</span>
         <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
@@ -1602,7 +1606,7 @@ function SpeedToLeadView({ store, range, dir }) {
   const talkBreak = useMemo(() => { const it = KPIS.avg_talk_time_channel.customBreakout(talk.rows || []).filter((x) => x.value > 0); return it.length ? { items: it, custom: true } : null; }, [talk]);
   return (
     <div className="flex flex-col gap-5">
-      {noTimeMsg && (<div className="rounded-xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
+      {noTimeMsg && (<div className="rounded-2xl p-3 text-[12px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
         <b style={{ color: T.warn }}>Excluded — no claim clock:</b> {noTimeMsg}. These scenarios have a date-only start timestamp in the sync (no time of day), so response time can't be measured. Add a time component to that column's Salesforce/Coefficient export to enable them.</div>)}
       <StlHero big target={stlGoal} title="Speed to Lead — Accountable Window" caption="Median time from lead in → claimed · weekdays 10am–7pm, the scored window" rows={b("primary")} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -1633,15 +1637,15 @@ function CardGrid({ ids, results, breakouts, sparks, big }) {
   return <div className="grid" style={{ gap: D.gridGap, gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>{ids.map((id) => <KpiCard key={id} kpi={KPIS[id]} result={results[id]} breakout={breakouts[id]} spark={sparks[id]} big={big} />)}</div>;
 }
 function SubHead({ label, note }) {
-  return (<div className="flex items-baseline gap-2 mt-1">
-    <span className="text-[11px] font-semibold uppercase" style={{ color: T.faint, letterSpacing: "0.08em" }}>{label}</span>
-    <span className="text-[11px]" style={{ color: T.faint, opacity: 0.65 }}>{note}</span>
+  return (<div className="flex items-baseline gap-2.5 mt-1">
+    <span className="text-[13px] font-semibold" style={{ color: T.sub, letterSpacing: "-0.01em" }}>{label}</span>
+    <span className="text-[11px]" style={{ color: T.faint }}>{note}</span>
   </div>);
 }
 // At-a-glance strip: a few headline numbers with a trailing-12mo trend arrow, above the full grid.
 // Print-safe (static). items: [{ label, value, format, trend: 1 | -1 | 0 | null }].
 function SummaryStrip({ items }) {
-  return (<div className="rounded-xl p-4 flex flex-wrap gap-x-8 gap-y-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="rounded-2xl p-4 flex flex-wrap gap-x-8 gap-y-4" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     {items.map((it) => (
       <div key={it.label} className="flex flex-col gap-1" style={{ minWidth: 128 }}>
         <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.06em" }}>{it.label}</span>
@@ -1696,7 +1700,7 @@ function apptStats(store, dir, range) {
 }
 function ApptCard({ title, bigText, caption, items, kind }) {
   const max = kind === "count" ? Math.max(1, ...items.map((i) => i.value)) : 1;
-  return (<div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-2xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-center gap-1.5">
       <span className="text-[13px] font-medium truncate" style={{ color: T.sub }}>{title}</span>
       <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
@@ -1745,7 +1749,7 @@ function OutcomeDonutCard({ title, tally, big }) {
   const data = meta.map(([label, color]) => ({ label, color, value: tally[label] || 0 }));
   const total = data.reduce((s, d) => s + d.value, 0);
   const present = data.filter((d) => d.value > 0);
-  return (<div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+  return (<div className="rounded-2xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
     <div className="flex items-center gap-1.5 mb-3">
       <span className={`${big ? "text-[14px]" : "text-[13px]"} font-medium truncate`} style={{ color: T.sub }}>{title}</span>
       <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>
@@ -1893,7 +1897,7 @@ function ListingPartnerView({ store, dir, range, lp }) {
     <div className="text-[12px]" style={{ color: T.faint }}>Listing Partner view · <span style={{ color: T.sub }}>{lp}</span> — deal metrics track signed listings; appointments are scored on those assigned to {lp}, broken out by who set them.</div>
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
       {cards.map((c) => <KpiCard key={c.kpi.id} kpi={c.kpi} result={c.result} breakout={null} spark={null} />)}
-      <div className="rounded-xl p-4 flex flex-col gap-2" style={{ background: T.card, border: `1px dashed ${T.border}` }}>
+      <div className="rounded-2xl p-4 flex flex-col gap-2" style={{ background: T.card, border: `1px dashed ${T.border}` }}>
         <span className="text-[13px] font-medium" style={{ color: T.sub }}>Deals to Signed Listing</span>
         <span className="text-[13px]" style={{ color: T.faint }}>Pending your report — will wire in when it lands.</span>
       </div>
@@ -1949,7 +1953,7 @@ const dispoCurRank = (st) => { st = String(st ?? "").trim();
 
 function DispoStat({ label, value, sub, tag }) {
   return (
-    <div className="rounded-xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+    <div className="rounded-2xl p-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
       <div className="flex items-center gap-2">
         <div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</div>
         {tag && <DispoTag kind={tag} />}
@@ -2045,12 +2049,12 @@ function DispositionsView({ store, range, dir }) {
   }, [active]);
 
   if (!rows.length) return (
-    <div className="rounded-xl p-4 text-[13px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
+    <div className="rounded-2xl p-4 text-[13px]" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
       No Dispositions data loaded yet — check that the "Opportunities &amp; Campaigns x YTD" tab is present in the Dispositions workbook and the Sheets API key is set.</div>);
 
   return (
     <div className="flex flex-col gap-5" id="dispositions-view">
-      <div className="rounded-xl p-3.5 text-[12px] leading-relaxed" style={{ background: T.track, color: T.sub }}>
+      <div className="rounded-2xl p-3.5 text-[12px] leading-relaxed" style={{ background: T.track, color: T.sub }}>
         <b style={{ color: T.ink }}>Dispositions</b> tracks buyer campaigns — the marketing of each opportunity to a pool of buyers, and where every campaign member sits in the buyer journey. Two lenses live on this tab, tagged on each metric:
         <span className="inline-block mx-1"><DispoTag kind="snapshot" /></span> = live state right now (ignores the date filter),
         <span className="inline-block mx-1"><DispoTag kind="dated" /></span> = follows the date filter, by opportunity <b>close date</b>. Active-campaign health is inherently a "right now" question, so it stays a snapshot; closed volume is the metric that moves with the date window. "Active" = opportunities in <b>Pre-Marketing, Delayed Marketing, or Marketing</b>.
@@ -2209,7 +2213,7 @@ function vpMetricsFor(store, dir, org, range, rangeFwd) {
 // Small tile in the dashboard's card language.
 function VpStat({ label, value, sub, tone }) {
   const c = tone === "good" ? T.good : tone === "bad" ? T.bad : T.ink;
-  return (<div className="rounded-xl p-3.5 flex flex-col gap-1.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="lh-card rounded-2xl p-3.5 flex flex-col gap-1.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="text-[10.5px] uppercase tracking-wide" style={{ color: T.faint, letterSpacing: "0.05em" }}>{label}</div>
     <div className="text-[22px] font-bold leading-none tracking-tight" style={{ color: c, fontVariantNumeric: "tabular-nums" }}>{value}</div>
     {sub && <div className="text-[11px] leading-snug" style={{ color: T.sub }}>{sub}</div>}
@@ -2217,7 +2221,7 @@ function VpStat({ label, value, sub, tone }) {
 }
 // Titled sub-card matching the dashboard tiles, with an optional number badge and right-slot.
 function VpCard({ n, title, hint, right, children }) {
-  return (<div className="rounded-xl p-4 flex flex-col gap-3.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+  return (<div className="lh-card rounded-2xl p-4 flex flex-col gap-3.5" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
     <div className="flex items-start justify-between gap-3">
       <div className="flex items-start gap-2 min-w-0">
         {n && <span className="text-[10px] font-bold rounded px-1.5 py-0.5 shrink-0 mt-px" style={{ background: T.accentSoft, color: T.accent }}>{n}</span>}
@@ -2318,7 +2322,7 @@ function VpPerVpTable({ perVp }) {
           <React.Fragment key={group.g}>
             <tr><td colSpan={nVp + 1} className="pt-3 pb-1 px-3 text-[10px] font-semibold uppercase" style={{ color: T.accent, letterSpacing: "0.07em", background: T.card, position: "sticky", left: 0 }}>{group.g}</td></tr>
             {group.rows.map((r) => (
-              <tr key={r.h} style={{ color: T.ink }}>
+              <tr key={r.h} className="lh-row" style={{ color: T.ink }}>
                 <td className="py-2 px-3" style={{ ...cell, color: T.sub, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card }}>{r.h}</td>
                 {perVp.map(({ vp, m }) => (
                   <td key={vp} className="py-2 px-3 text-right" style={{ ...cell, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
@@ -2935,7 +2939,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   if (lpName) return <ListingPartnerView store={store} dir={dir} range={range} lp={lpName} />;
 
   const txSubToggle = isTxView ? (
-    <div className="inline-flex rounded-lg p-0.5 self-start" style={{ background: T.track }}>
+    <div className="inline-flex rounded-xl p-0.5 self-start" style={{ background: T.track }}>
       {[["coordination", "Coordination"], ["dispositions", "Dispositions"], ["fieldops", "Field Operations"]].map(([v, l]) => (
         <button key={v} onClick={() => setTxSub(v)} className="text-[13px] font-medium px-3 py-1.5 rounded-md transition-colors whitespace-nowrap"
           style={{ background: txSub === v ? T.card : "transparent", color: txSub === v ? T.ink : T.sub, boxShadow: txSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
@@ -3013,7 +3017,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
                   <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>ARIP → Closed</th>
                 </tr></thead>
                 <tbody>{repConversion.map((r) => (
-                  <tr key={r.rep} style={{ color: T.ink }}>
+                  <tr key={r.rep} className="lh-row" style={{ color: T.ink }}>
                     <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
                     <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub }}>{r.role}</td>
                     <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{r.attended.toLocaleString()}</td>
@@ -3048,13 +3052,13 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barCategoryGap={10}>
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
           <YAxis type="category" dataKey="label" tick={{ fontSize: 12, fill: T.sub }} axisLine={false} tickLine={false} width={168} interval={0} />
-          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={T.accent} maxBarSize={22}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 11, fill: T.sub }} /></Bar>
         </BarChart></ResponsiveContainer></div>
         <div className="text-[11px] mt-2" style={{ color: T.faint }}>From the "YTD x Pipeline Forecast" report — Total Forecasted Revenue by stage (open + closed). Scoped to <b>{drillLabel}</b>.</div></>) : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No open pipeline for this scope in the selected period.</div>}
       </Panel>
       <Panel title={`Time between stages — ${drillLabel}`}>
-        <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
+        <div className="flex rounded-xl p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
           {[["aripclose", "ARIP → Close"], ["bystage", "By stage"], ["byrep", "By rep"]].map(([v, l]) => (
             <button key={v} onClick={() => setTxTimeTab(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
               style={{ background: txTimeTab === v ? T.card : "transparent", color: txTimeTab === v ? T.ink : T.sub, boxShadow: txTimeTab === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
@@ -3142,7 +3146,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </Panel>
       <div className="flex items-center gap-3 flex-wrap px-1 -mt-1">
         <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>Record types</span>
-        <div className="flex rounded-lg p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+        <div className="flex rounded-xl p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
           {[["all", "All record types"], ["excl", "Exclude front-end"]].map(([v, l]) => {
             const active = (v === "excl") === txExclFlips;
             return (<button key={v} onClick={() => setTxExclFlips(v === "excl")} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
@@ -3152,7 +3156,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </div>
       <Panel title={`Stage conversion — ${drillLabel}`}>
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-          <div className="flex rounded-lg p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
+          <div className="flex rounded-xl p-0.5" style={{ background: T.track, border: `1px solid ${T.border}` }}>
             {[["close", "Close rate"], ["advance", "Advance probability"]].map(([v, l]) => (
               <button key={v} onClick={() => setStageLens(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
                 style={{ background: stageLens === v ? T.card : "transparent", color: stageLens === v ? T.ink : T.sub, boxShadow: stageLens === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
@@ -3269,14 +3273,14 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <BarChart data={txByType.rows.map((x) => ({ label: x.type, value: x.deals }))} layout="vertical" margin={{ top: 0, right: 32, left: 10, bottom: 0 }}>
             <XAxis type="number" tick={{ fontSize: 10, fill: T.faint }} axisLine={false} tickLine={false} allowDecimals={false} />
             <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: T.sub }} axisLine={false} tickLine={false} width={120} />
-            <Tooltip cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+            <Tooltip cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
             <Bar dataKey="value" radius={[0, 3, 3, 0]}><LabelList dataKey="value" position="right" style={{ fontSize: 10, fill: T.sub }} />{txByType.rows.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
           </BarChart></ResponsiveContainer></div></Panel>
         <Panel title={`Forecasted revenue by transaction type — ${drillLabel}`}><div style={{ height: 190 }}><ResponsiveContainer>
           <BarChart data={txByType.rows.map((x) => ({ label: x.type, value: x.forecast }))} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
             <XAxis type="number" tick={{ fontSize: 10, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
             <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: T.sub }} axisLine={false} tickLine={false} width={120} />
-            <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+            <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
             <Bar dataKey="value" radius={[0, 3, 3, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 9, fill: T.sub }} />{txByType.rows.map((_, i) => <Cell key={i} fill={T.accent} />)}</Bar>
           </BarChart></ResponsiveContainer></div></Panel>
       </div>
@@ -3344,7 +3348,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </Panel>
     </>) : (<>
     {!vpDrill && (<Panel collapsible title="Appointments">
-      <div className="flex rounded-lg p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
+      <div className="flex rounded-xl p-0.5 mb-3" style={{ background: T.track, border: `1px solid ${T.border}`, width: "fit-content" }}>
         {[["showrate", "Show Rate"], ["funnel", "Appt → ARIP"], ["outcomes", "Outcomes"], ["breakout", "Breakout"]].map(([v, l]) => (
           <button key={v} onClick={() => setApptTab(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
             style={{ background: apptTab === v ? T.card : "transparent", color: apptTab === v ? T.ink : T.sub, boxShadow: apptTab === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
@@ -3371,11 +3375,11 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </>) : (<div className="flex flex-col gap-4">
         <SubHead label="Avg ICP per appointment set" note={`ISA ICP Total Score · scored appts · Created Date in period${apptIcp.overall != null ? ` · overall ${apptIcp.overall.toFixed(1)}` : ""}`} />
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
-          <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+          <div className="rounded-2xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
             <span className="text-[12px] font-medium" style={{ color: T.sub }}>By appointment type</span>
             <AvgIcpBars items={apptIcp.byType} />
           </div>
-          <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+          <div className="rounded-2xl p-4 flex flex-col gap-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
             <span className="text-[12px] font-medium" style={{ color: T.sub }}>By subject</span>
             <AvgIcpBars items={apptIcp.bySubject} />
           </div>
@@ -3393,7 +3397,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
-          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
           <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
         </BarChart></ResponsiveContainer></div>
         </div>
@@ -3404,7 +3408,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
           <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={132} />
-          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+          <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
         </BarChart></ResponsiveContainer></div>
         </div>
@@ -3416,7 +3420,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
-        <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+        <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 12, background: T.card, color: T.ink, boxShadow: T.shadow }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
       </BarChart></ResponsiveContainer></div>
       </div>
@@ -3427,7 +3431,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
           <th className="pb-2 px-2 whitespace-nowrap font-medium">Rep</th><th className="pb-2 px-2 whitespace-nowrap font-medium">Team</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Closed Revenue</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Deals</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Avg Deal</th></tr></thead>
-        <tbody>{leaderboard.length ? (() => { const mRev = Math.max(0, ...leaderboard.map((r) => r.rev)), mDeals = Math.max(0, ...leaderboard.map((r) => r.deals)); return leaderboard.map((row) => (<tr key={row.owner} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+        <tbody>{leaderboard.length ? (() => { const mRev = Math.max(0, ...leaderboard.map((r) => r.rev)), mDeals = Math.max(0, ...leaderboard.map((r) => r.deals)); return leaderboard.map((row) => (<tr key={row.owner} className="lh-row" style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 px-2 font-medium">{row.owner}</td><td className="py-2 px-2" style={{ color: T.sub }}>{row.team || "—"}</td>
           <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", color: row.rev < 0 ? T.bad : T.ink, ...heatBg(row.rev, mRev) }}>{fmt(row.rev, "currency")}</td>
           <td className="py-2 px-2 text-right" style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.deals, mDeals) }}>{row.deals}</td>
@@ -3443,7 +3447,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">QCs</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Appts Set</th>
           <th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Attended</th><th className="pb-2 px-2 whitespace-nowrap font-medium text-right">Show Rate</th></tr></thead>
         <tbody>{(() => { const mx = (k) => Math.max(0, ...scorecard.map((r) => r[k] || 0)); const M = { oppsCreated: mx("oppsCreated"), oppsArip: mx("oppsArip"), aripReview: mx("aripReview"), oppsAssigned: mx("oppsAssigned"), oppsDeaded: mx("oppsDeaded"), minutes: mx("minutes"), qcs: mx("qcs"), apptsSet: mx("apptsSet"), shownAttended: mx("shownAttended"), rate: Math.max(0, ...scorecard.map((r) => r.rate || 0)) };
-          const R = "py-2 px-2 text-right"; return scorecard.map((row) => (<tr key={row.rep} style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
+          const R = "py-2 px-2 text-right"; return scorecard.map((row) => (<tr key={row.rep} className="lh-row" style={{ borderTop: `1px solid ${T.border}`, color: T.ink }}>
           <td className="py-2 px-2 font-medium">{row.rep}</td>
           <td className="py-2 px-2" style={{ color: T.sub }}>{row.role || "—"}</td>
           <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.oppsCreated, M.oppsCreated) }}>{row.oppsCreated.toLocaleString()}</td>
@@ -3539,8 +3543,20 @@ export default function App() {
     ? (org.rep !== "All" ? org.rep : org.team !== "All" ? org.team : "All reps")
     : "Company";
   const periodText = (DATE_PRESETS.find(([v]) => v === date.preset) || [null, date.preset])[1];
-  const shell = (body) => (<div className="min-h-screen w-full" style={{ background: T.canvas, ...FONT }}>
-    <div className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${T.border}`, background: T.card }}>
+  const shell = (body) => (<div className="min-h-screen w-full" style={{ background: T.canvas, ...FONT, "--lh-accent": T.accent, "--lh-border-strong": T.border2, "--lh-row-hover": T.rowHover, "--lh-hover-shadow": T.hoverShadow }}>
+    <style>{`
+      .lh-card{transition:box-shadow .16s ease,border-color .16s ease}
+      .lh-card:hover{border-color:var(--lh-border-strong);box-shadow:var(--lh-hover-shadow)}
+      .lh-row{transition:background-color .12s ease}
+      .lh-row:hover>td{background:var(--lh-row-hover)}
+      .lh-tab{transition:background-color .16s ease,color .16s ease}
+      .lh-tab:hover{color:var(--lh-accent)}
+      select{transition:border-color .15s ease,box-shadow .15s ease}
+      select:hover{border-color:var(--lh-border-strong)}
+      details>summary{transition:color .15s ease}
+      details>summary::-webkit-details-marker{display:none}
+    `}</style>
+    <div className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${T.border}`, background: T.card, backgroundImage: T.grad }}>
       <div className="flex items-center gap-3"><div className="w-2 h-6 rounded-sm" style={{ background: T.accent }} />
         <div><div className="text-[15px] font-semibold" style={{ color: T.ink }}>Leverage Homes</div><div className="text-[11px]" style={{ color: T.faint }}>Executive Dashboard · <span style={{ color: T.sub }}>{scopeText}</span> · {periodText}</div></div></div>
       <div className="text-[11px] flex items-center gap-2" style={{ color: T.faint }}>
@@ -3564,7 +3580,7 @@ export default function App() {
   );
 
   if (st.loading) return shell(<LoadingScreen progress={st.progress} />);
-  if (st.error) return shell(<div className="rounded-xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
+  if (st.error) return shell(<div className="rounded-2xl p-4 text-sm" style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, color: T.ink }}>
     <div className="font-semibold mb-1" style={{ color: T.warn }}>Couldn’t load Google Sheets</div><div style={{ color: T.sub }}>{st.error}</div>
     <div className="mt-2" style={{ color: T.faint }}>Check the API key, that the Sheets API is enabled, and each workbook is shared “Anyone with the link → Viewer.”</div></div>);
 
@@ -3582,6 +3598,6 @@ export default function App() {
         <span>· data current through {f.map((x) => `${x.label} ${fmtD(x.date)}`).join(" · ")}</span>
       </div>); })()}
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r52 (VP layout: the Deals Closed / Avg Deal / Deals&Rev Out of ARIP / Opps Created&Deaded / Avg ICP tile strip moved up to sit directly above the Per-VP breakout, with a print page-break after the ARIP-&rarr;Deal-Review outcome-tile row so the strip + breakout start on a fresh PDF page. Per-VP breakout redesigned: transposed to metrics-down / VPs-across and grouped (Funnel / Appointments / Activity / Revenue) so it reads without a wide horizontal scroll. Prior r51: Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
+    <details className="mt-5 text-[11px]" style={{ color: T.faint }}><summary style={{ cursor: "pointer", color: T.sub, userSelect: "none" }}>Details · build &amp; source</summary><p className="mt-2 leading-relaxed" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-16 · v2-features-r54 (Brand-polish refinement pass: subtle hover states on cards, table rows, tabs, and filters; softer branded chart tooltips (opaque card, rounded, shadow); section sub-headers de-capsed to sentence case with stronger contrast; smoother transitions throughout — all visual-only. Prior r53: Visual-only Leverage brand refresh — palette moved to deep navy / Leverage teal / mint / off-white: light mode drops the beige/gold for an off-white bg + clean white cards; dark mode keeps the navy foundation but swaps the generic green accent for the Leverage teal/mint family. Softer, larger corner radii; a restrained teal→navy gradient on the header; soft branded shadows with lighter borders; the main tabs use a soft teal selected-fill instead of a hard card; build/source history tucked behind this Details disclosure while the data-freshness line stays visible. No layout, section-order, metric, calculation, or VP Focus structural changes. Prior r52: VP layout: the Deals Closed / Avg Deal / Deals&Rev Out of ARIP / Opps Created&Deaded / Avg ICP tile strip moved up to sit directly above the Per-VP breakout, with a print page-break after the ARIP-&rarr;Deal-Review outcome-tile row so the strip + breakout start on a fresh PDF page. Per-VP breakout redesigned: transposed to metrics-down / VPs-across and grouped (Funnel / Appointments / Activity / Revenue) so it reads without a wide horizontal scroll. Prior r51: Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p></details>
   </>);
 }
