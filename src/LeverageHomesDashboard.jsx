@@ -12,14 +12,14 @@ const THEMES = {
   light: {
     canvas: "#ECE3D0", card: "#FFFFFF", border: "#2B2721", ink: "#14110B",
     sub: "#4B4535", faint: "#877C60", accent: "#A87C0A", accentSoft: "#F3E8CB",
-    good: "#0F6B4A", warn: "#9A5308", bad: "#A81729", track: "#E6DDC8", warnSoft: "#F6ECD6",
+    good: "#0F6B4A", warn: "#9A5308", bad: "#A81729", track: "#E6DDC8", warnSoft: "#F6ECD6", bar: "#B7AB8B",
     shadow: "0 2px 5px rgba(28,22,12,0.13), 0 1px 2px rgba(28,22,12,0.08)",
     chart: ["#A87C0A", "#7A5C12", "#C9A227", "#14110B", "#5A5140", "#D9C68C", "#9A5308"],
   },
   dark: {
     canvas: "#0A0F1A", card: "#121A2A", border: "#25324A", ink: "#EAF1F8",
     sub: "#A7B6C9", faint: "#6E7E93", accent: "#34C08C", accentSoft: "#123528",
-    good: "#34C08C", warn: "#E0A63E", bad: "#F2607F", track: "#1B2740", warnSoft: "#2A2214",
+    good: "#34C08C", warn: "#E0A63E", bad: "#F2607F", track: "#1B2740", warnSoft: "#2A2214", bar: "#48586E",
     shadow: "none",
     chart: ["#34C08C", "#5FD3A8", "#8FE3C4", "#7FA0C9", "#A7B6C9", "#2E9E78", "#E0A63E"],
   },
@@ -1428,7 +1428,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
     const width = smax ? Math.round((b.value / smax) * 100) : 0;
     return (<div key={b.label} className="flex items-center gap-2">
       <span className="text-[11px] shrink-0 truncate" style={{ width: 96, color: T.sub }} title={b.label}>{b.label}</span>
-      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: T.accent }} /></div>
+      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: T.bar }} /></div>
       <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
     </div>);
   };
@@ -1436,7 +1436,6 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`${labelCls} font-medium truncate`} style={{ color: T.sub }}>{kpi.label}</span>
-        <span className="text-[8px] font-bold px-1 py-0.5 rounded tracking-wider shrink-0" style={{ color: live ? T.accent : T.faint, background: live ? T.accentSoft : "transparent", border: live ? "none" : `1px solid ${T.border}` }}>{live ? "LIVE" : "SNAPSHOT"}</span>
       </div>
       {result.variance != null && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0" style={{ color, background: result.status === "good" ? T.accentSoft : "transparent" }}>{result.variance >= 0 ? "+" : ""}{(result.variance * 100).toFixed(0)}%</span>}</div>
     {result.unattributable
@@ -1462,7 +1461,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
       {items.slice(0, 12).map((b) => {
         const hasT = !custom && b.target != null && b.target > 0;
         const hit = hasT ? (lower ? b.value <= b.target : b.value >= b.target) : null;
-        const barColor = hasT ? (hit ? T.good : T.bad) : T.accent;
+        const barColor = hasT ? (hit ? T.good : T.bad) : T.bar;
         const width = hasT ? Math.min(100, Math.round((b.value / b.target) * 100)) : (bmax ? Math.round((b.value / bmax) * 100) : 0);
         return (<div key={b.label} className="flex items-center gap-2">
           <span className="text-[11px] shrink-0 truncate" style={{ width: 84, color: T.sub }} title={b.label}>{b.label}</span>
@@ -2234,7 +2233,7 @@ function VpGroup({ label, rows, empty, extra }) {
             {r.tag && <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0" style={{ background: T.accentSoft, color: T.accent }}>{r.tag}</span>}
             <span className="text-[12px] truncate" style={{ color: T.sub }} title={r.label}>{r.label}</span>
           </div>
-          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(((r.value || 0) / max) * 100)}%`, height: "100%", background: T.accent }} /></div>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(((r.value || 0) / max) * 100)}%`, height: "100%", background: T.bar }} /></div>
           <div className="text-[13px] text-right shrink-0" style={{ width: 36, color: T.ink, fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>{(r.value || 0).toLocaleString()}</div>
           <div className="text-[11px] text-right shrink-0" style={{ width: r.wide ? 112 : 44, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{r.right}</div>
         </div>))}
@@ -2276,6 +2275,8 @@ function VpPerVpTable({ perVp }) {
     { h: "Avg call", get: (m) => fmtDur(m.calls.avgSec) },
     { h: "Pipeline", get: (m) => fmt(m.pipeline, "currency") },
     { h: "Closed rev", get: (m) => fmt(m.closedRev, "currency") },
+    { h: "Rev / opp", get: (m) => (m.assigned.count ? fmt(m.closedRev / m.assigned.count, "currency") : "—") },
+    { h: "Rev / appt", get: (m) => { const a = m.selfGroup.total + m.assignedGroup.total; return a ? fmt(m.closedRev / a, "currency") : "—"; } },
   ];
   return (<div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
     <table className="w-full text-[12.5px]" style={{ borderCollapse: "collapse", minWidth: 960 }}>
@@ -2313,7 +2314,7 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
   const vps = useMemo(() => [...(repsInScope(dir, org) || new Set())].sort(), [dir, org]);
   const b = useMemo(() => vpMetricsFor(store, dir, org, range, rangeFwd), [store, dir, org, range, rangeFwd]);
   const perVp = useMemo(() => (vps.length > 1 ? vps.map((vp) => ({ vp, m: vpMetricsFor(store, dir, { ...ALL_ORG, rep: vp }, range, rangeFwd) })) : []), [store, dir, vps, range, rangeFwd]);
-  const live = <span className="text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider shrink-0" style={{ color: T.accent, background: T.accentSoft }}>LIVE</span>;
+  const live = null;
   const setterExtra = b.assigned.setterRows.length > 7 ? <div className="text-[11px]" style={{ color: T.faint }}>+{b.assigned.setterRows.length - 7} more setters</div> : null;
   return (
     <div className="flex flex-col gap-4">
@@ -2323,11 +2324,11 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
           <div className="text-[13px] font-bold uppercase tracking-wide" style={{ color: T.ink, letterSpacing: "0.06em" }}>VP Focus · <span style={{ color: T.accent }}>{drillLabel}</span></div>
           <div className="text-[11px]" style={{ color: T.faint }}>Assigned opps, appointment funnel, conversion &amp; output{vps.length > 1 ? ` · ${vps.length} VPs blended (per-VP below)` : ""} · appts by Start · ARIP = the VP's opps entering ARIP in the same window</div>
         </div>
-        {live}
+        
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <VpCard n="1" title="Opps assigned → ARIP" hint="opportunities assigned to the VP · ratio = opps ÷ ARIPs" right={live}>
+        <VpCard n="1" title="Opps assigned → ARIP" hint="opportunities assigned to the VP · ratio = opps ÷ ARIPs">
           <VpRatio arips={b.arips} appts={b.assigned.count} unit="opps" />
           <VpGroup label="Routing" rows={[
             { label: "Set for self", tag: "SELF", value: b.assigned.selfSet, right: vpShare(b.assigned.selfSet, b.assigned.count) },
@@ -2336,7 +2337,7 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
           <VpGroup label="Who created them · by others" rows={b.assigned.setterRows.slice(0, 7)} empty="No externally-created opportunities." extra={setterExtra} />
         </VpCard>
 
-        <VpCard n="2" title="Appts attended → ARIP" hint="met appointments · ratio = appts ÷ ARIPs in window" right={live}>
+        <VpCard n="2" title="Appts attended → ARIP" hint="met appointments · ratio = appts ÷ ARIPs in window">
           <VpRatio arips={b.arips} appts={b.attByType.overall.appts} unit="met" />
           <VpGroup label="By type" rows={b.attByType.rows.map((t) => ({ label: t.label, value: t.appts, wide: true, right: t.appts ? `${ratio1inN(b.arips, t.appts)} · ${Math.round((b.arips / t.appts) * 100)}%` : "—" }))} />
           <VpGroup label="Routing" rows={[
@@ -2916,6 +2917,14 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       {vpDrill && <VpFocus store={store} dir={dir} org={org} range={range} rangeFwd={rangeFwd} drillLabel={drillLabel} />}
       {!vpDrill && <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
         label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />}
+      {vpDrill ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          {["deals_closed", "avg_deal", "arip_dealreview", "rev_out_of_arip", "opps_created", "opps_deaded", "avg_icp_per_appt"].map((id) => {
+            const r = results[id];
+            return <VpStat key={id} label={KPIS[id].label} value={r && r.value != null ? fmt(r.value, KPIS[id].format) : "—"} />;
+          })}
+        </div>
+      ) : (<>
       <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
       <CardGrid big ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
       <SubHead label="Leading indicators" note="activities that drive those results" />
@@ -2925,7 +2934,8 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         <CardGrid ids={salesLeadingCall} results={results} breakouts={breakouts} sparks={sparks} />
       </>)}
       {org.rep !== "All" && <RepTrendStrip ids={["opps_to_arip", "opps_created", "appointments", "calls", "talk_time", "leads_claimed"]} sparks={sparks} results={results} />}
-      {org.rep === "All" && vpAttribution.length > 0 && (() => {
+      </>)}
+      {org.rep === "All" && !vpDrill && vpAttribution.length > 0 && (() => {
         const maxRev = Math.max(1, ...vpAttribution.map((v) => v.rev));
         const maxRPA = Math.max(1, ...vpAttribution.map((v) => v.revPerAppt || 0));
         const maxRAO = Math.max(1, ...vpAttribution.map((v) => v.revPerAssigned || 0));
@@ -2969,7 +2979,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
                   <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Rep</th>
                   <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>Role</th>
                   <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Attended</th>
-                  <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>ARIPs</th>
                   <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>Attended → ARIP</th>
                   <th className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}` }}>Deals Closed</th>
                   <th className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>ARIP → Closed</th>
@@ -2979,7 +2988,6 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
                     <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap" }}>{r.rep}</td>
                     <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub }}>{r.role}</td>
                     <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{r.attended.toLocaleString()}</td>
-                    <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" }}>{r.arips}</td>
                     <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(r.attToArip, maxAA, false) || {}) }}>{r.attToArip == null ? <span style={{ color: T.faint }}>—</span> : Math.round(r.attToArip * 100) + "%"}</td>
                     <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, color: T.sub, fontVariantNumeric: "tabular-nums" }}>{r.closed}</td>
                     <td className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", fontWeight: 700, ...(heatBg(r.aripToClosed, maxAC, false) || {}) }}>{r.aripToClosed == null ? <span style={{ color: T.faint }}>—</span> : Math.round(r.aripToClosed * 100) + "%"}</td>
@@ -3347,34 +3355,44 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
       </div>
       )}
     </Panel>)}
-    {(
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-      <Panel collapsible title={`Deals · Close Date × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+    <Panel collapsible title={`Revenue & pipeline — ${drillLabel}`}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div>
+          <div className="text-[12px] font-semibold mb-2" style={{ color: T.sub }}>Close Date × Projected Rev</div>
+          <div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byCloseMonth} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[4, 4, 0, 0]}><LabelList dataKey="value" position="top" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byCloseMonth.map((d, i) => <Cell key={i} fill={T.accent} />)}</Bar>
-        </BarChart></ResponsiveContainer></div></Panel>
-      <Panel collapsible title={`Deals · Stage × Projected Rev — ${drillLabel}`}><div style={{ height: 260 }}><ResponsiveContainer>
+        </BarChart></ResponsiveContainer></div>
+        </div>
+        <div>
+          <div className="text-[12px] font-semibold mb-2" style={{ color: T.sub }}>Stage × Projected Rev</div>
+          <div style={{ height: 260 }}><ResponsiveContainer>
         <BarChart data={byStage} layout="vertical" margin={{ top: 0, right: 44, left: 10, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={T.track} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} />
           <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: T.sub }} axisLine={false} tickLine={false} width={132} />
           <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]}><LabelList dataKey="value" position="right" formatter={(v) => "$" + Math.round(v / 1000) + "k"} style={{ fontSize: 10, fill: T.sub }} />{byStage.map((_, i) => <Cell key={i} fill={T.chart[i % T.chart.length]} />)}</Bar>
-        </BarChart></ResponsiveContainer></div></Panel>
-    </div>
-    )}
-    <Panel collapsible title={`Closed revenue by month — ${drillLabel} (Total Forecasted Revenue · YTD)`}><div style={{ height: 200 }}><ResponsiveContainer>
+        </BarChart></ResponsiveContainer></div>
+        </div>
+      </div>
+      <div className="mt-5">
+        <div className="text-[12px] font-semibold mb-2" style={{ color: T.sub }}>Closed revenue by month · Total Forecasted Revenue (YTD)</div>
+        <div style={{ height: 200 }}><ResponsiveContainer>
       <BarChart data={byMonth} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={T.track} vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fontSize: 11, fill: T.faint }} axisLine={false} tickLine={false} tickFormatter={(v) => "$" + Math.round(v / 1000) + "k"} width={48} />
         <Tooltip formatter={(v) => fmt(v, "currency")} cursor={{ fill: T.track }} contentStyle={{ border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>{byMonth.map((d, i) => <Cell key={i} fill={d.value < 0 ? T.bad : T.good} />)}</Bar>
-      </BarChart></ResponsiveContainer></div></Panel>
+      </BarChart></ResponsiveContainer></div>
+      </div>
+    </Panel>
+    {!vpDrill && (<>
     <Panel collapsible title={`Team leaderboard (closed revenue) — ${drillLabel}`}>
       <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}><table className="w-full text-sm" style={{ borderCollapse: "collapse", minWidth: 520 }}>
         <thead><tr style={{ color: T.faint }} className="text-left text-[11px] uppercase tracking-wide">
@@ -3410,6 +3428,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           <td className={R} style={{ fontVariantNumeric: "tabular-nums", ...heatBg(row.shownAttended, M.shownAttended) }}>{row.shownAttended.toLocaleString()}</td>
           <td className={R} style={{ fontVariantNumeric: "tabular-nums", color: row.rate == null ? T.faint : T.ink, ...(row.rate == null ? {} : heatBg(row.rate, M.rate)) }}>{row.rate == null ? "—" : fmt(row.rate, "percent")}</td></tr>)); })()}</tbody>
       </table></div></Panel>
+    </>)}
     </>)}
   </div>);
 }
@@ -3526,7 +3545,14 @@ export default function App() {
       <FilterBar org={org} setOrg={setOrg} date={date} setDate={setDate} dir={st.dir} view={view} />
     </div>
     <ExecutiveDashboard store={st.store} dir={st.dir} org={org} range={range} rangeFwd={rangeFwd} view={view} />
+    {(() => { const f = st.store ? dataFreshness(st.store) : []; if (!f.length) return null;
+      const fmtD = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return (<div className="flex items-center gap-2 flex-wrap text-[11px] mt-4" style={{ color: T.faint }}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: T.good }} />
+        <span style={{ color: T.sub }}>Live · Google Sheets</span>
+        <span>· data current through {f.map((x) => `${x.label} ${fmtD(x.date)}`).join(" · ")}</span>
+      </div>); })()}
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r49 (VP Focus: set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r50 (VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
   </>);
 }
