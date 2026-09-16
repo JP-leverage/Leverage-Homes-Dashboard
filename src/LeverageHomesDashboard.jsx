@@ -2269,40 +2269,64 @@ function VpRatio({ arips, appts, unit }) {
   </div>);
 }
 // Per-VP table (team scope only): one row per VP, headline value for every metric.
+// Compact strip of the metrics VP Focus doesn't already show (rendered above the per-VP breakout at VP scope).
+function VpExtraStrip({ results }) {
+  const ids = ["deals_closed", "avg_deal", "arip_dealreview", "rev_out_of_arip", "opps_created", "opps_deaded", "avg_icp_per_appt"];
+  return (<div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+    {ids.map((id) => { const r = results[id]; return <VpStat key={id} label={KPIS[id].label} value={r && r.value != null ? fmt(r.value, KPIS[id].format) : "—"} />; })}
+  </div>);
+}
+// Per-VP breakout — TRANSPOSED for readability: metrics down the left (grouped), one column per VP across the
+// top, so a few VPs fit without a wide horizontal scroll. Ratio metrics show their raw counts beneath.
 function VpPerVpTable({ perVp }) {
-  const cols = [
-    { h: "Assigned → ARIP", get: (m) => ratio1inN(m.arips, m.assigned.count), sub: (m) => `${m.assigned.count}→${m.arips}` },
-    { h: "Attended → ARIP", get: (m) => ratio1inN(m.arips, m.attByType.overall.appts), sub: (m) => `${m.attByType.overall.appts}→${m.arips}` },
-    { h: "Self-set", get: (m) => m.selfGroup.total.toLocaleString() },
-    { h: "Assigned appts", get: (m) => m.assignedGroup.total.toLocaleString() },
-    { h: "Show · self", get: (m) => vpPct(m.selfGroup.showOverall.rate) },
-    { h: "Show · assign", get: (m) => vpPct(m.assignedGroup.showOverall.rate) },
-    { h: "ARIP → DR", get: (m) => vpPct(m.aripToDR.rate) },
-    { h: "Contracts", get: (m) => m.contracts.toLocaleString() },
-    { h: "Talk time", get: (m) => fmt(m.calls.minutes, "minutes") },
-    { h: "Outbound", get: (m) => m.calls.calls.toLocaleString() },
-    { h: "QCs", get: (m) => m.calls.qcs.toLocaleString() },
-    { h: "Avg call", get: (m) => fmtDur(m.calls.avgSec) },
-    { h: "Pipeline", get: (m) => fmt(m.pipeline, "currency") },
-    { h: "Closed rev", get: (m) => fmt(m.closedRev, "currency") },
-    { h: "Rev / opp", get: (m) => (m.assigned.count ? fmt(m.closedRev / m.assigned.count, "currency") : "—") },
-    { h: "Rev / appt", get: (m) => { const a = m.selfGroup.total + m.assignedGroup.total; return a ? fmt(m.closedRev / a, "currency") : "—"; } },
+  const groups = [
+    { g: "Funnel", rows: [
+      { h: "Opps assigned → ARIP", get: (m) => ratio1inN(m.arips, m.assigned.count), sub: (m) => `${m.assigned.count} opps → ${m.arips}` },
+      { h: "Appts attended → ARIP", get: (m) => ratio1inN(m.arips, m.attByType.overall.appts), sub: (m) => `${m.attByType.overall.appts} met → ${m.arips}` },
+      { h: "ARIP → Deal Review", get: (m) => vpPct(m.aripToDR.rate) },
+    ] },
+    { g: "Appointments", rows: [
+      { h: "Self-set appts", get: (m) => m.selfGroup.total.toLocaleString() },
+      { h: "Assigned appts", get: (m) => m.assignedGroup.total.toLocaleString() },
+      { h: "Show rate · self-set", get: (m) => vpPct(m.selfGroup.showOverall.rate) },
+      { h: "Show rate · assigned", get: (m) => vpPct(m.assignedGroup.showOverall.rate) },
+    ] },
+    { g: "Activity", rows: [
+      { h: "Contracts Sent", get: (m) => m.contracts.toLocaleString() },
+      { h: "Talk Time", get: (m) => fmt(m.calls.minutes, "minutes") },
+      { h: "Outbound calls", get: (m) => m.calls.calls.toLocaleString() },
+      { h: "QCs", get: (m) => m.calls.qcs.toLocaleString() },
+      { h: "Avg call", get: (m) => fmtDur(m.calls.avgSec) },
+    ] },
+    { g: "Revenue", rows: [
+      { h: "Pipeline (forecast)", get: (m) => fmt(m.pipeline, "currency") },
+      { h: "Closed revenue", get: (m) => fmt(m.closedRev, "currency") },
+      { h: "Rev / assigned opp", get: (m) => (m.assigned.count ? fmt(m.closedRev / m.assigned.count, "currency") : "—") },
+      { h: "Rev / appt", get: (m) => { const a = m.selfGroup.total + m.assignedGroup.total; return a ? fmt(m.closedRev / a, "currency") : "—"; } },
+    ] },
   ];
+  const nVp = perVp.length;
+  const cell = { borderBottom: `1px solid ${T.border}` };
   return (<div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-    <table className="w-full text-[12.5px]" style={{ borderCollapse: "collapse", minWidth: 960 }}>
-      <thead><tr style={{ color: T.faint }} className="text-[10.5px] uppercase tracking-wide">
-        <th className="py-2 px-2 text-left" style={{ borderBottom: `1px solid ${T.border}`, position: "sticky", left: 0, background: T.card }}>VP</th>
-        {cols.map((c) => <th key={c.h} className="py-2 px-2 text-right whitespace-nowrap" style={{ borderBottom: `1px solid ${T.border}` }}>{c.h}</th>)}
+    <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 300 + nVp * 116 }}>
+      <thead><tr className="text-[11px] uppercase tracking-wide">
+        <th className="py-2 px-3 text-left" style={{ ...cell, color: T.faint, position: "sticky", left: 0, background: T.card }}>Metric</th>
+        {perVp.map(({ vp }) => <th key={vp} className="py-2 px-3 text-right whitespace-nowrap" style={{ ...cell, color: T.ink, fontWeight: 700 }}>{vp}</th>)}
       </tr></thead>
-      <tbody>{perVp.map(({ vp, m }) => (
-        <tr key={vp} style={{ color: T.ink }}>
-          <td className="py-2 px-2" style={{ borderBottom: `1px solid ${T.border}`, fontWeight: 600, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card }}>{vp}</td>
-          {cols.map((c) => (
-            <td key={c.h} className="py-2 px-2 text-right" style={{ borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-              <div style={{ fontWeight: 600 }}>{c.get(m)}</div>
-              {c.sub && <div className="text-[10px]" style={{ color: T.faint }}>{c.sub(m)}</div>}
-            </td>))}
-        </tr>))}
+      <tbody>
+        {groups.map((group) => (
+          <React.Fragment key={group.g}>
+            <tr><td colSpan={nVp + 1} className="pt-3 pb-1 px-3 text-[10px] font-semibold uppercase" style={{ color: T.accent, letterSpacing: "0.07em", background: T.card, position: "sticky", left: 0 }}>{group.g}</td></tr>
+            {group.rows.map((r) => (
+              <tr key={r.h} style={{ color: T.ink }}>
+                <td className="py-2 px-3" style={{ ...cell, color: T.sub, whiteSpace: "nowrap", position: "sticky", left: 0, background: T.card }}>{r.h}</td>
+                {perVp.map(({ vp, m }) => (
+                  <td key={vp} className="py-2 px-3 text-right" style={{ ...cell, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                    <div style={{ fontWeight: 600 }}>{r.get(m)}</div>
+                    {r.sub && <div className="text-[10px]" style={{ color: T.faint }}>{r.sub(m)}</div>}
+                  </td>))}
+              </tr>))}
+          </React.Fragment>))}
       </tbody>
     </table>
   </div>);
@@ -2320,7 +2344,7 @@ function VpApptGroupCard({ n, title, hint, g }) {
     </div>
   </VpCard>);
 }
-function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
+function VpFocus({ store, dir, org, range, rangeFwd, drillLabel, extraTiles }) {
   const vps = useMemo(() => [...(repsInScope(dir, org) || new Set())].sort(), [dir, org]);
   const b = useMemo(() => vpMetricsFor(store, dir, org, range, rangeFwd), [store, dir, org, range, rangeFwd]);
   const perVp = useMemo(() => (vps.length > 1 ? vps.map((vp) => ({ vp, m: vpMetricsFor(store, dir, { ...ALL_ORG, rep: vp }, range, rangeFwd) })) : []), [store, dir, vps, range, rangeFwd]);
@@ -2371,8 +2395,10 @@ function VpFocus({ store, dir, org, range, rangeFwd, drillLabel }) {
         <VpStat label="9 · Closed Revenue" value={fmt(b.closedRev, "currency")} tone="good" />
       </div>
 
+      {extraTiles && <div style={{ breakBefore: "page", pageBreakBefore: "always" }}>{extraTiles}</div>}
+
       {perVp.length > 0 && (
-        <VpCard title="Per-VP breakout" hint="headline for every metric, by VP">
+        <VpCard title="Per-VP breakout" hint="every metric, by VP">
           <VpPerVpTable perVp={perVp} />
         </VpCard>)}
     </div>);
@@ -2924,17 +2950,10 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   return (<div className="flex flex-col gap-5">
     {txSubToggle}
     {(!isTxView && !isMktView) ? (<>
-      {vpDrill && <VpFocus store={store} dir={dir} org={org} range={range} rangeFwd={rangeFwd} drillLabel={drillLabel} />}
+      {vpDrill && <VpFocus store={store} dir={dir} org={org} range={range} rangeFwd={rangeFwd} drillLabel={drillLabel} extraTiles={<VpExtraStrip results={results} />} />}
       {!vpDrill && <SummaryStrip items={["closed_revenue", "pipeline_forecast", "deals_closed", "show_rate"].map((id) => ({
         label: KPIS[id].label, value: results[id] && results[id].value, format: KPIS[id].format, trend: trendOf(id) }))} />}
-      {vpDrill ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          {["deals_closed", "avg_deal", "arip_dealreview", "rev_out_of_arip", "opps_created", "opps_deaded", "avg_icp_per_appt"].map((id) => {
-            const r = results[id];
-            return <VpStat key={id} label={KPIS[id].label} value={r && r.value != null ? fmt(r.value, KPIS[id].format) : "—"} />;
-          })}
-        </div>
-      ) : (<>
+      {!vpDrill && (<>
       <SubHead label="Lagging indicators" note="results — what the team is ultimately measured on" />
       <CardGrid big ids={salesLagging} results={results} breakouts={breakouts} sparks={sparks} />
       <SubHead label="Leading indicators" note="activities that drive those results" />
@@ -3563,6 +3582,6 @@ export default function App() {
         <span>· data current through {f.map((x) => `${x.label} ${fmtD(x.date)}`).join(" · ")}</span>
       </div>); })()}
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r51 (Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r52 (VP layout: the Deals Closed / Avg Deal / Deals&Rev Out of ARIP / Opps Created&Deaded / Avg ICP tile strip moved up to sit directly above the Per-VP breakout, with a print page-break after the ARIP-&rarr;Deal-Review outcome-tile row so the strip + breakout start on a fresh PDF page. Per-VP breakout redesigned: transposed to metrics-down / VPs-across and grouped (Funnel / Appointments / Activity / Revenue) so it reads without a wide horizontal scroll. Prior r51: Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
   </>);
 }
