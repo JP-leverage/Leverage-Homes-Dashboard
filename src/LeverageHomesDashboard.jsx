@@ -1180,7 +1180,7 @@ function computeKpi(kpi, store, dir, org, range, targetRange) {
   if (target != null && target !== 0) {
     progress = value / target; variance = kpi.higherIsBetter ? value / target - 1 : target / value - 1;
     status = (kpi.higherIsBetter ? progress >= 1 : value <= target) ? "good"
-      : (kpi.higherIsBetter ? progress >= 0.85 : value <= target * 1.15) ? "warn" : "bad";
+      : (kpi.higherIsBetter ? progress >= 0.70 : value <= target / 0.70) ? "warn" : "bad";
   }
   let subtitle = kpi.subStat ? kpi.subStat(filtered, ds) : null;
   if (kpi.uniqueTotal && ds.dedupeInPeriod) {
@@ -1222,6 +1222,13 @@ function CountNum({ value, format }) { return <>{fmt(useCountUp(value), format)}
 // Subtle per-column heatmap: shades a cell background with the accent color at an alpha proportional
 // to value ÷ column-max (invert for lower-is-better columns). Returns undefined below a floor so
 // near-zero cells stay clean. 8-digit hex alpha prints fine.
+// Traffic-light bar color by attainment vs target: >=100% green, 70-99% yellow, <70% red.
+// For lower-is-better metrics, attainment = target/value (fewer beats the goal). Returns null when no target.
+function goalColor(value, target, higherIsBetter) {
+  if (target == null || target === 0 || value == null) return null;
+  const attain = (higherIsBetter === false) ? (value <= 0 ? 2 : target / value) : (value / target);
+  return attain >= 1 ? T.good : attain >= 0.70 ? T.warn : T.bad;
+}
 function heatBg(v, max, invert) {
   if (v == null || !max || max <= 0) return undefined;
   let r = Math.max(0, Math.min(1, v / max)); if (invert) r = 1 - r;
@@ -1426,10 +1433,14 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
   const numCls = big ? D.numBig : D.num;
   const secBar = (b) => {
     const width = smax ? Math.round((b.value / smax) * 100) : 0;
+    const gc = goalColor(b.value, b.target, kpi.higherIsBetter) || T.accent;
     return (<div key={b.label} className="flex items-center gap-2">
       <span className="text-[11px] shrink-0 truncate" style={{ width: 96, color: T.sub }} title={b.label}>{b.label}</span>
-      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: T.bar }} /></div>
-      <div className="text-[11px] text-right shrink-0" style={{ width: 74, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
+      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${width}%`, height: "100%", background: gc }} /></div>
+      <div className="text-right shrink-0" style={{ width: 74 }}>
+        <div className="text-[11px] leading-tight" style={{ fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmt(b.value, kpi.format)}</div>
+        {b.target != null && b.target > 0 && <div className="text-[9px] leading-none" style={{ color: T.faint }}>/ {fmt(b.target, kpi.format)}</div>}
+      </div>
     </div>);
   };
   return (<div className={`rounded-xl ${D.cardPad} flex flex-col gap-3 h-full`} style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
@@ -1460,8 +1471,7 @@ function KpiCard({ kpi, result, breakout, spark, big }) {
     {items && items.length > 0 && (<div className="flex flex-col gap-2 pt-2 mt-1" style={{ borderTop: `1px solid ${T.border}` }}>
       {items.slice(0, 12).map((b) => {
         const hasT = !custom && b.target != null && b.target > 0;
-        const hit = hasT ? (lower ? b.value <= b.target : b.value >= b.target) : null;
-        const barColor = hasT ? (hit ? T.good : T.bad) : T.bar;
+        const barColor = hasT ? goalColor(b.value, b.target, kpi.higherIsBetter) : T.accent;
         const width = hasT ? Math.min(100, Math.round((b.value / b.target) * 100)) : (bmax ? Math.round((b.value / bmax) * 100) : 0);
         return (<div key={b.label} className="flex items-center gap-2">
           <span className="text-[11px] shrink-0 truncate" style={{ width: 84, color: T.sub }} title={b.label}>{b.label}</span>
@@ -2233,7 +2243,7 @@ function VpGroup({ label, rows, empty, extra }) {
             {r.tag && <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0" style={{ background: T.accentSoft, color: T.accent }}>{r.tag}</span>}
             <span className="text-[12px] truncate" style={{ color: T.sub }} title={r.label}>{r.label}</span>
           </div>
-          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(((r.value || 0) / max) * 100)}%`, height: "100%", background: T.bar }} /></div>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.track }}><div style={{ width: `${Math.round(((r.value || 0) / max) * 100)}%`, height: "100%", background: T.accent }} /></div>
           <div className="text-[13px] text-right shrink-0" style={{ width: 36, color: T.ink, fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>{(r.value || 0).toLocaleString()}</div>
           <div className="text-[11px] text-right shrink-0" style={{ width: r.wide ? 112 : 44, color: T.faint, fontVariantNumeric: "tabular-nums" }}>{r.right}</div>
         </div>))}
@@ -2489,7 +2499,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           if (!team) { offReps.add(rep); rows.forEach((r) => offRows.add(r)); return; } // aggregate, don't name
           const value = valOf(crFilter(rep, rows));
           if (!(value > 0)) return;
-          (grouped[team] = grouped[team] || []).push({ label: rep, value });
+          (grouped[team] = grouped[team] || []).push({ label: rep, value, target: repTarget(kpi, rep) });
         });
         const offArr = [...offRows];
         const offValue = offArr.length ? valOf(kpi.crExcludeNonVp ? offArr.filter((r) => !isContractReview(r)) : offArr) : 0; // off-roster = non-VP → drop CR
@@ -3553,6 +3563,6 @@ export default function App() {
         <span>· data current through {f.map((x) => `${x.label} ${fmtD(x.date)}`).join(" · ")}</span>
       </div>); })()}
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r50 (VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
+    <p className="text-[11px] mt-5" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-15 · v2-features-r51 (Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p>
   </>);
 }
