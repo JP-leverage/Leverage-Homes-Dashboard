@@ -97,6 +97,7 @@ const WORKBOOKS = {
   context:       { id: "1LUi9VfpX0T_1bgg40NPvt6ltxNX0ASPmwGiymbDmxa8", title: "Homes Dashboard Pt 1 (Context)" },
   activities:    { id: "1gfYW52duE4tmNr5b92F2HvanZroMlcaQZ01_5f4bgac", title: "Homes Dashboard Pt 1 (Activities)" },
   marketing:     { id: "1lkftyL4-_kX-hxHXQZ_ylwPlFQg2wYJBXXHE2bzN4wc", title: "Homes Dashboard PT1 (Marketing)" },
+  marketing_pt2: { id: "189aqyVy3bg4enmJNDo3UQMcAbTc3R2Xi65d2XIXup6M", title: "Homes Dashboard PT2 (Marketing)" },
   tasks:         { id: "1Vs-IMKBDW3FilFSM8gQKo1NqSgUqh0aVPhFPb4wGOPE", title: "Homes Dashboard Pt 1 (Tasks)" },
   leads_wb:      { id: "1iS4PLBML63qWqpgWwxRH83jFVw7TJ9SAlHK06JQ2MmI", title: "Homes Dashboard Pt 1 (Leads)" },
   transactions:  { id: "1nMLGx8PSvq1aSx6GAOCtaieNIiSEHHezNS-NxjkEH3w", title: "Homes Dashboard PT1 (Transactions)" },
@@ -191,7 +192,8 @@ const DATASETS = {
     workbook: "opportunities",
     require: ["New Value", "Opportunity Owner", "Acquisition Manager"], exclude: [], tabInclude: /Opps\s*-\s*ARIP\s*-\s*YTD/i,
     schema: { id: "Opportunity ID", name: "Opportunity Name", owner: "Opportunity Owner", acqManager: "Acquisition Manager",
-      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score", txType: "Transaction Type" },
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", newValue: "New Value", oldValue: "Old Value", icp: "ISA ICP Total Score", txType: "Transaction Type",
+      source: "Lead Source" },
     dedupe: (r) => `${r.id}|${r.date}`, dedupeInPeriod: "id", dateField: "date", dateCandidates: ["Edit Date"], repFields: ["owner", "acqManager", "acqManager2", "followUp"],
   },
   appt_funnel: {
@@ -246,6 +248,37 @@ const DATASETS = {
       oldValue: "Old Value", newValue: "New Value" },
     dedupe: (r) => r.leadId, dateField: "date", dateCandidates: ["Edit Date"], repField: null,
   },
+  // Reactivations at event grain (one row per status change) — the cost panel counts only Dead → New Lead revives.
+  mkt_revives: {
+    workbook: "marketing",
+    require: ["Lead ID", "Field / Event"], exclude: [], tabInclude: /Reactivated/i,
+    schema: { leadId: "Lead ID", source: "Lead Source", oldValue: "Old Value", newValue: "New Value" },
+    dedupe: (r) => `${r.leadId}|${r.date}|${r.oldValue}`, dateField: "date", dateCandidates: ["Edit Date"], repField: null,
+  },
+  // ── Marketing cost attribution — PT2 Marketing workbook (QuickBooks + Rippling imports). See MKT_COST.
+  mkt_spend: { // QuickBooks "Vendor Expenses by Month" pivot: Vendor × month columns (+ Total). Kept raw and unpivoted in buildMktCostModel.
+    workbook: "marketing_pt2",
+    require: ["Vendor"], exclude: ["Vendor Type"], tabInclude: /Marketing Spend COGS/i, tabField: "__tab", passthrough: true,
+    schema: {}, dedupe: null, dateField: null, repField: null,
+  },
+  mkt_vendor_map: { // Vendor → Lead Source(s) + Vendor Type (Software / Service = direct, Data = shared)
+    workbook: "marketing_pt2",
+    require: ["Vendor"], exclude: [], tabInclude: /Vendor x Lead Source/i,
+    schema: { vendor: "Vendor", sources: ["Lead Source(s)", "Lead Source", "Lead Sources"], type: "Vendor Type" },
+    dedupe: null, dateField: null, repField: null,
+  },
+  mkt_roster: { // Rippling roster — only identity + title are read (no DOB / comp / contact fields)
+    workbook: "marketing_pt2",
+    require: ["Employee - ID", "Title"], exclude: [], tabInclude: /Roster/i,
+    schema: { empId: "Employee - ID", name: "Employee", first: "Legal first name", last: "Legal last name", title: "Title", status: "Employment status" },
+    dedupe: (r) => r.empId || null, dateField: null, repField: null,
+  },
+  mkt_labor: { // QuickBooks P&L detail of contractor pay; Rippling journal memos carry the payee + pay period
+    workbook: "marketing_pt2",
+    require: ["Memo/Description", "Amount"], exclude: [], tabInclude: /Contractor Payments/i,
+    schema: { account: "Distribution Account", txType: "Transaction Type", postDate: "Date", payee: "Name", memo: "Memo/Description", amount: "Amount" },
+    dedupe: null, dateField: null, repField: null,
+  },
   leads_claimed: {
     workbook: "leads_wb",
     require: ["Lead ID", "New Value", "Edit Date"], exclude: [], tabInclude: /Leads Claimed/i,
@@ -297,9 +330,19 @@ const DATASETS = {
     require: [], exclude: [], tabInclude: /Closed Opps x YTD/i,
     schema: { id: "Opportunity ID", owner: "Opportunity Owner", name: "Opportunity Name",
       revenue: ["Total Forecasted Revenue", "Total Net Revenue", "Net Revenue"], acqManager: "Acquisition Manager",
-      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", listingPartner: "Listing Partner", closeDate: "Close Date", txType: "Transaction Type" },
+      acqManager2: "Acquisition Manager 2", followUp: "Follow Up Specialist", listingPartner: "Listing Partner", closeDate: "Close Date", txType: "Transaction Type",
+      source: "Lead Source", recordType: "Opportunity Record Type" },
     dedupe: (r) => (r.id != null && r.id !== "" ? String(r.id) : null), dateField: "closeDate",
     repField: "owner", repFields: ["owner", "acqManager", "acqManager2", "followUp"],
+  },
+  // Optional historical closed deals (e.g. "Closed Opps x All Time") — read only by the marketing cost panel to
+  // unlock lifetime / trailing-12 windows; the Sales tab keeps using closed_opps (YTD). Same columns as the YTD tab.
+  closed_opps_hist: {
+    workbook: "opportunities_pt2",
+    require: ["Opportunity ID", "Close Date"], exclude: [], tabInclude: /Closed Opps x (All Time|Last Year|20\d\d)/i,
+    schema: { id: "Opportunity ID", name: "Opportunity Name", revenue: ["Total Forecasted Revenue", "Total Net Revenue", "Net Revenue"],
+      closeDate: "Close Date", source: "Lead Source", recordType: "Opportunity Record Type" },
+    dedupe: (r) => (r.id != null && r.id !== "" ? String(r.id) : null), dateField: "closeDate", repField: null, optional: true,
   },
   listing_pipeline: {
     workbook: "opportunities_pt2",
@@ -517,10 +560,10 @@ async function loadAll(onProgress) {
     const ds = DATASETS[key];
     onProgress && onProgress({ done, total, label: friendly(ds) }); // announce what's about to load
     const { rows, claimed } = await client.loadDataset(ds);
-    store[key] = dedupe(normalize(rows, ds), ds.dedupe);
+    store[key] = dedupe(ds.passthrough ? rows : normalize(rows, ds), ds.dedupe); // passthrough keeps every column (wide pivots)
     done++;
     onProgress && onProgress({ done, total, label: friendly(ds) });
-    if (useGoogle && !rows.length)
+    if (useGoogle && !rows.length && !ds.optional)
       diagnostics.push({ dataset: key, note: `no tabs matched [${ds.require.join(", ")}] in ${WORKBOOKS[ds.workbook].title}` });
     else if (useGoogle) console.log(`[${key}] ${store[key].length} rows from tabs:`, claimed);
   }
@@ -659,7 +702,25 @@ function buildSample() {
     { KPI: "opps_created", Metric: "Opps Created", Scope: "Role", "Scope Value": "Acquisition Managers", Period: "Monthly", Target: 80 },
     { KPI: "show_rate", Metric: "Show Rate", Scope: "Role", "Scope Value": "Acquisition Managers", Period: "Absolute", Target: 0.65 },
   ];
-  return { opps_created, opps_closed, pipeline, appointments, leads, calls, directory, targets, uw_cycle, uw_accuracy };
+  // Marketing cost samples (PT2 Marketing shapes): a vendor×month pivot, the vendor map, a small roster and Rippling memos.
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mkt_spend = [["Dialer Co", "Software", "Call Center", 9000], ["SMS Co", "Software", "Text Message Campaign", 2600], ["List Data Co", "Data", "Call Center, Text Message Campaign", 1500],
+    ["Mail Co", "Service", "Direct Mail Campaign", 5000], ["Lead Vendor Co", "Service", "Pay Per Lead", 4000], ["New Vendor Co", "", "", 700]].map(([v, , , base]) => {
+    const row = { Vendor: v, __tab: "Marketing Spend COGS x All Time" };
+    for (let k = 0; k < 9; k++) { const d = new Date(REF.getFullYear(), REF.getMonth() - k, 1); row[`${MON[d.getMonth()]} ${d.getFullYear()}`] = Math.round(base * (0.7 + r() * 0.6)); }
+    return row; });
+  const mkt_vendor_map = [["Dialer Co", "Call Center", "Software"], ["SMS Co", "Text Message Campaign", "Software"], ["List Data Co", "Call Center, Text Message Campaign", "Data"],
+    ["Mail Co", "Direct Mail Campaign", "Service"], ["Lead Vendor Co", "Pay Per Lead", "Service"]].map(([v, s, t]) => ({ Vendor: v, "Lead Source(s)": s, "Vendor Type": t }));
+  const mkt_roster = [["E1", "Ana Cruz", "Ana", "Cruz", "Call Center Associate, Tier 1"], ["E2", "Ben Reyes", "Ben", "Reyes", "Call Center Associate, Tier 1"],
+    ["E3", "Cara Lim", "Cara", "Lim", "Texting Agent, Tier 1"]].map(([id, n, f, l, t]) => ({ "Employee - ID": id, Employee: n, "Legal first name": f, "Legal last name": l, Title: t, "Employment status": "Active" }));
+  const mkt_labor = [];
+  ["Ana Maria Cruz", "Ben Santos Reyes", "Cara Lim", "Someone Else"].forEach((nm) => { for (let k = 0; k < 16; k++) {
+    const st = new Date(REF); st.setDate(1); st.setMonth(st.getMonth() - Math.floor(k / 2)); if (k % 2) st.setDate(16);
+    const en = new Date(st); if (k % 2) en.setMonth(en.getMonth() + 1, 0); else en.setDate(15);
+    const post = new Date(en); post.setDate(post.getDate() + 3);
+    mkt_labor.push({ "Distribution Account": "600100_International Contractor Expense", "Transaction Type": "Journal Entry", Date: iso(post), Amount: 400 + Math.round(r() * 200),
+      "Memo/Description": `[Rippling] Contractor Payments - Amount for ${nm}. Payroll run: ${MON[st.getMonth()]} ${String(st.getDate()).padStart(2, "0")} - ${MON[en.getMonth()]} ${String(en.getDate()).padStart(2, "0")}:  Homes - Hourly Int'l Contractors` }); } });
+  return { opps_created, opps_closed, pipeline, appointments, leads, calls, directory, targets, uw_cycle, uw_accuracy, mkt_spend, mkt_vendor_map, mkt_roster, mkt_labor };
 }
 
 // Derive a role label from the TEAM name. The Context sheet no longer carries a ROLE
@@ -2953,6 +3014,393 @@ function AmFuFocus({ store, dir, org, range, rangeFwd, drillLabel, results }) {
     </div>);
 }
 
+/* ── Marketing cost attribution (r81) ─────────────────────────────────────────────────────────────
+ * Spend  = QuickBooks "Vendor Expenses by Month" pivot (PT2 Marketing · "Marketing Spend COGS x …"), mapped to
+ *          lead source(s) by the "Vendor x Lead Source - Context" tab:
+ *            · Software / Service vendors → charged straight to their listed source (even split if several).
+ *            · Data vendors (shared)      → each month's bill split across its listed sources in proportion to each
+ *              source's Software+Service spend over the trailing MKT_COST.weightMonths (3) months ending that month.
+ *            · Unmapped vendors           → "Unattributed" (never dropped, so totals tie to QuickBooks).
+ * Labor  = Rippling contractor ledger ("All Contractor Payments x …") → payee matched to the "Marketing Spend -
+ *          Roster" employee by legal first + last name tokens → title keyword → source. Payees not on the roster
+ *          are not marketing cost and are excluded. Each payment is spread over its pay period's business days.
+ * All facts are kept at month (vendor) / pay-period (labor) grain and prorated by business days into any range,
+ * so sub-month ranges are estimates and are labeled as such. */
+const MKT_COST = {
+  directType: /^(software|service)$/i,
+  sharedType: /^data$/i,
+  titleRules: [{ test: /call\s*center/i, source: "Call Center" }, { test: /texting|\bsms\b/i, source: "Text Message Campaign" }],
+  weightMonths: 3, // trailing window for shared-cost weights: long enough to smooth lumpy dialer billing, short enough that a paused channel (e.g. Direct Mail, dormant Nov-25→Aug-26) stops absorbing shared data cost
+  windows: { "Direct Mail Campaign": "lifetime" }, // per-source attribution window; anything else = "period"
+  unattributed: "Unattributed",
+  missingBillLookback: 3, // a vendor billed in each of the prior N months but not the current month → "no bill posted yet"
+};
+const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const monIdx = (s) => MONTHS3.indexOf(String(s || "").slice(0, 3).toLowerCase());
+const srcLabel = (s) => String(s ?? "").trim() || "(No lead source)";
+const srcKey = (s) => srcLabel(s).toLowerCase();
+const mktVendorKey = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").replace(/(llc|inc|corp)$/, "");
+const nameTokens = (s) => String(s ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean);
+const ymKey = (d) => d.getFullYear() * 12 + d.getMonth();
+const ymDate = (k) => new Date(Math.floor(k / 12), k % 12, 1);
+// Pivot month header → first of that month. Handles "Jan 2026" / "January 2026" (Sheets FORMATTED_STRING),
+// ISO / M/D/YYYY strings, and serial numbers (as number or numeric string). Anything else (Vendor, Total) → null.
+function monthFromHeader(h) {
+  if (h == null || h === "") return null;
+  const s = String(h).trim();
+  let m = s.match(/^([A-Za-z]{3,9})\.?[\s-]+(\d{4})$/);
+  if (m && monIdx(m[1]) >= 0) return new Date(+m[2], monIdx(m[1]), 1);
+  if (/^\d{5}(\.\d+)?$/.test(s)) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(+s) * 86400000); return new Date(d.getUTCFullYear(), d.getUTCMonth(), 1); }
+  if (/^\d{4}[-/]\d{1,2}([-/]\d{1,2})?$/.test(s) || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(s)) { const d = parseDate(s.length <= 7 ? s + "-01" : s); return d ? new Date(d.getFullYear(), d.getMonth(), 1) : null; }
+  return null;
+}
+// Share of a [pStart,pEnd] period that falls inside [rStart,rEnd], by business days (calendar days if the period has none).
+function periodShare(pStart, pEnd, rStart, rEnd) {
+  const s = pStart > rStart ? pStart : rStart, e = pEnd < rEnd ? pEnd : rEnd;
+  if (sod(s) > sod(e)) return 0;
+  const bd = businessDaysBetween(pStart, pEnd);
+  if (bd > 0) return businessDaysBetween(s, e) / bd;
+  const cal = Math.round((sod(pEnd) - sod(pStart)) / 86400000) + 1;
+  return (Math.round((sod(e) - sod(s)) / 86400000) + 1) / cal;
+}
+// Parse a Rippling journal memo: "[Rippling] Commission - Amount for {Legal Name}. Payroll run: Jul 01 - Jul 16: …".
+// Year comes from the posting date (a December period posted in January lands in December).
+function parseRipplingMemo(memo, post) {
+  const s = String(memo || "");
+  const nm = s.match(/Amount for (.+?)\.\s*Payroll run/i); if (!nm) return null;
+  const kind = (s.match(/\]\s*(.+?)\s+-\s+Amount for/i) || [])[1] || "Payment";
+  let start = null, end = null;
+  const pr = s.match(/Payroll run:?\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*-\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})/i);
+  if (pr && post && monIdx(pr[1]) >= 0 && monIdx(pr[3]) >= 0) {
+    start = new Date(post.getFullYear(), monIdx(pr[1]), +pr[2]);
+    if (start - post > 45 * 86400000) start.setFullYear(start.getFullYear() - 1);
+    end = new Date(start.getFullYear(), monIdx(pr[3]), +pr[4]);
+    if (end < start) end.setFullYear(end.getFullYear() + 1);
+  }
+  if (!start && post) { start = sod(post); end = sod(post); }
+  return { payee: nm[1].replace(/\s+/g, " ").trim(), kind: kind.trim(), start, end };
+}
+function mktEarliest(rows, field) { let min = null; (rows || []).forEach((r) => { const d = parseDate(r[field]); if (d && (!min || d < min)) min = d; }); return min; }
+
+// Range-independent model: every spend dollar as a (source, month|pay-period, amount) fact, plus coverage + flags.
+function buildMktCostModel(store) {
+  const flags = [];
+  const vmap = new Map(), conflicts = [];
+  (store.mkt_vendor_map || []).forEach((r) => {
+    const name = String(r.vendor ?? "").trim(); if (!name) return;
+    const k = mktVendorKey(name);
+    const sources = String(r.sources ?? "").split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+    const type = String(r.type ?? "").trim().toLowerCase();
+    const e = { name, sources, type };
+    const prev = vmap.get(k);
+    if (prev) { if (prev.type !== type || prev.sources.map(srcKey).sort().join("|") !== sources.map(srcKey).sort().join("|")) conflicts.push(`${prev.name} / ${name}`); return; }
+    vmap.set(k, e);
+  });
+  if (conflicts.length) flags.push({ tone: "warn", text: `Vendor rows disagree after name matching (first row used): ${conflicts.join("; ")}` });
+  // ── vendor spend: unpivot, sum within a tab, first tab wins across tabs (so an "All Time" + "YTD" pair never double-counts)
+  const cells = new Map(); // vkey|ym → { vendor, vkey, ym, amount, tab }
+  (store.mkt_spend || []).forEach((row) => {
+    const vendor = String(row.Vendor ?? "").trim();
+    if (!vendor || /^total\b/i.test(vendor)) return;
+    const vkey = mktVendorKey(vendor), tab = row.__tab || "";
+    for (const h of Object.keys(row)) {
+      const m = monthFromHeader(h); if (!m) continue;
+      const amt = Number(row[h]); if (!amt) continue;
+      const ck = `${vkey}|${ymKey(m)}`, cur = cells.get(ck);
+      if (!cur) cells.set(ck, { vendor, vkey, ym: ymKey(m), amount: amt, tab });
+      else if (cur.tab === tab) cur.amount += amt;
+    }
+  });
+  const spend = [...cells.values()];
+  // pass 1 — direct (software/service) spend per source per month, used as the weight basis for shared costs
+  const directBy = new Map(); // srcKey → Map(ym → amt)
+  const addDirect = (s, ym, a) => { const k = srcKey(s); if (!directBy.has(k)) directBy.set(k, new Map()); const m = directBy.get(k); m.set(ym, (m.get(ym) || 0) + a); };
+  const unmapped = new Set(), untyped = new Set();
+  spend.forEach((c) => {
+    const e = vmap.get(c.vkey);
+    if (!e || !e.sources.length) return;
+    const isShared = MKT_COST.sharedType.test(e.type);
+    if (!isShared) { if (!MKT_COST.directType.test(e.type)) untyped.add(e.name); e.sources.forEach((s) => addDirect(s, c.ym, c.amount / e.sources.length)); }
+  });
+  const trailingDirect = (s, ym) => { const m = directBy.get(srcKey(s)); if (!m) return 0; let t = 0; for (let k = ym - MKT_COST.weightMonths + 1; k <= ym; k++) t += m.get(k) || 0; return t; };
+  const facts = [], evenSplitShared = new Set();
+  spend.forEach((c) => {
+    const e = vmap.get(c.vkey);
+    const start = ymDate(c.ym), end = eod(new Date(start.getFullYear(), start.getMonth() + 1, 0));
+    const base = { kind: "vendor", vendor: e ? e.name : c.vendor, vkey: c.vkey, ym: c.ym, start, end };
+    if (!e || !e.sources.length) { unmapped.add(c.vendor); facts.push({ ...base, source: MKT_COST.unattributed, amount: c.amount, category: "unmapped", weight: 1 }); return; }
+    if (MKT_COST.sharedType.test(e.type)) {
+      const w = e.sources.map((s) => trailingDirect(s, c.ym)), W = w.reduce((a, b) => a + b, 0);
+      if (!W && e.sources.length > 1) evenSplitShared.add(e.name);
+      e.sources.forEach((s, i) => { const wt = W ? w[i] / W : 1 / e.sources.length; if (wt) facts.push({ ...base, source: s, amount: c.amount * wt, category: "shared", weight: wt }); });
+    } else e.sources.forEach((s) => facts.push({ ...base, source: s, amount: c.amount / e.sources.length, category: "direct", weight: 1 / e.sources.length }));
+  });
+  if (unmapped.size) flags.push({ tone: "warn", text: `Vendors not in the Vendor x Lead Source tab (shown as Unattributed): ${[...unmapped].join(", ")}` });
+  if (untyped.size) flags.push({ tone: "warn", text: `Vendor Type blank or unrecognized (treated as direct): ${[...untyped].join(", ")}` });
+  if (evenSplitShared.size) flags.push({ tone: "info", text: `Shared vendors split evenly in months where no listed source had direct spend: ${[...evenSplitShared].join(", ")}` });
+  // ── labor: ledger → roster employee → title keyword → source
+  const roster = []; const seenEmp = new Set();
+  (store.mkt_roster || []).forEach((r) => { const id = String(r.empId ?? "").trim(); if (!id || seenEmp.has(id)) return; seenEmp.add(id);
+    const title = String(r.title ?? "").trim(); const rule = MKT_COST.titleRules.find((x) => x.test.test(title));
+    roster.push({ id, name: String(r.name ?? "").trim() || `${r.first} ${r.last}`, first: nameTokens(r.first), last: nameTokens(r.last), title, source: rule ? rule.source : MKT_COST.unattributed }); });
+  const ambiguous = new Set(), badTitles = new Set(); let nonRoster = 0, laborStart = null, laborEnd = null;
+  (store.mkt_labor || []).forEach((r) => {
+    const amt = Number(r.amount); if (!amt) return;
+    const post = parseDate(r.postDate); if (!post) return;
+    const p = parseRipplingMemo(r.memo, post); if (!p) return;
+    const tk = new Set(nameTokens(p.payee));
+    const hits = roster.filter((e) => e.first.length && e.last.length && e.first.every((t) => tk.has(t)) && e.last.every((t) => tk.has(t)));
+    if (!hits.length) { nonRoster += amt; return; }
+    if (hits.length > 1 && new Set(hits.map((h) => h.title)).size > 1) { ambiguous.add(p.payee); return; }
+    const e = hits[0];
+    if (e.source === MKT_COST.unattributed) badTitles.add(e.title || "(blank)");
+    if (!laborStart || p.start < laborStart) laborStart = p.start;
+    if (!laborEnd || p.end > laborEnd) laborEnd = p.end;
+    facts.push({ kind: "labor", source: e.source, amount: amt, category: "labor", empId: e.id, employee: e.name, title: e.title, payKind: p.kind, start: sod(p.start), end: eod(p.end) });
+  });
+  if (ambiguous.size) flags.push({ tone: "warn", text: `Payees matching more than one roster employee with different titles (excluded): ${[...ambiguous].join(", ")}` });
+  if (badTitles.size) flags.push({ tone: "warn", text: `Roster titles with no lead-source keyword (labor shown as Unattributed): ${[...badTitles].join(", ")}` });
+  // ── outcome datasets (closed = YTD tab ∪ any historical tab, one row per Opportunity ID)
+  const closedSeen = new Set(), closed = [];
+  [...(store.closed_opps || []), ...(store.closed_opps_hist || [])].forEach((r) => { const id = String(r.id ?? "").trim(); const k = id || `${r.name}|${r.closeDate}`; if (closedSeen.has(k)) return; closedSeen.add(k); closed.push(r); });
+  const coverage = {
+    closed: mktEarliest(closed, "closeDate"), opps: mktEarliest(store.mkt_opps, "date"), arip: mktEarliest(store.arip_entered, "date"),
+    leadsBySource: (() => { const m = new Map(); (store.leads || []).forEach((r) => { const d = parseDate(r.date); const k = srcKey(r.source); if (d && (!m.has(k) || d < m.get(k))) m.set(k, d); }); return m; })(),
+    labor: laborStart, laborEnd,
+  };
+  const firstSpend = new Map(); facts.forEach((f) => { if (f.kind !== "vendor") return; const k = srcKey(f.source); if (!firstSpend.has(k) || f.start < firstSpend.get(k)) firstSpend.set(k, f.start); });
+  const displayName = new Map(); const nameOf = (s) => { const k = srcKey(s); if (!displayName.has(k)) displayName.set(k, srcLabel(s)); return displayName.get(k); };
+  facts.forEach((f) => nameOf(f.source));
+  return { facts, flags, coverage, closed, firstSpend, nameOf, nonRoster, rosterCount: roster.length, vendorsMapped: vmap.size, hasSpend: spend.length > 0 };
+}
+
+// Customer grouping: a back-end joins its front-end by Opportunity Name (after stripping "Back-End ~").
+const custKey = (n) => String(n ?? "").replace(/^\s*back[\s-]*end\s*~\s*/i, "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 25);
+const isListingRT = (r) => /listing/i.test(String(r.recordType ?? ""));
+// Group closed deals into customers. Returns { core: [{src, rev}], listing: [{src, rev}], orphanBackRev }.
+// core customer = a group with a non-back-end deal. Back-end-only groups add revenue but no new customer.
+function mktCustomers(rows) {
+  const groups = new Map(), listing = [];
+  rows.forEach((r) => {
+    const rev = num(r.revenue);
+    if (isListingRT(r)) { listing.push({ src: r.source, rev }); return; }
+    const k = custKey(r.name) || String(r.id); if (!groups.has(k)) groups.set(k, { src: null, rev: 0, front: false, back: false, other: false });
+    const g = groups.get(k); g.rev += rev;
+    if (isBackEndRT(r)) g.back = true;
+    else { g.front = true; if (!isFrontEndRT(r)) g.other = true; if (g.src == null || !isFrontEndRT(r)) g.src = r.source; }
+  });
+  const core = [], backOnly = [];
+  groups.forEach((g) => { if (g.front) core.push(g); else backOnly.push(g); });
+  // A Purchase front-end with no back-end yet and $0 fee is unrealized (the fee lands at back-end sale):
+  // it counts as an acquired customer for CAC but stays out of the LTV average until the back-end closes.
+  core.forEach((g) => { g.unrealized = !g.back && !g.other && g.rev === 0; });
+  return { core, listing, backOnly };
+}
+
+// Everything the efficiency panel shows for one range. Range-dependent; model is range-independent.
+function mktEfficiency(model, store, range, rangeFwd, opts, now = new Date()) {
+  const withLabor = !!opts.withLabor;
+  const today = eod(now), rEnd = range.end < today ? range.end : today;
+  const flags = [];
+  const monthAligned = range.start.getDate() === 1 && eod(range.end).getTime() === eom(range.end).getTime();
+  if (!monthAligned) flags.push({ tone: "info", text: "Estimated — spend is monthly (vendors) / per pay period (labor), prorated by business days into this range." });
+  // per-source window
+  const windowFor = (s) => {
+    const k = srcKey(s);
+    const mode = Object.entries(MKT_COST.windows).find(([n]) => srcKey(n) === k)?.[1];
+    if (mode !== "lifetime") return { start: range.start, mode: "period" };
+    const fs = model.firstSpend.get(k); if (!fs) return { start: range.start, mode: "period" };
+    const need = [["closed deals", model.coverage.closed], ["leads", model.coverage.leadsBySource.get(k)]];
+    const short = need.filter(([, d]) => !d || d - fs > 31 * 86400000);
+    if (short.length) return { start: range.start, mode: "period", pending: `Lifetime window pending — ${short.map(([l, d]) => `${l} history starts ${d ? d.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : "n/a"}`).join(", ")} vs spend from ${fs.toLocaleDateString(undefined, { month: "short", year: "numeric" })}` };
+    return { start: fs < range.start ? fs : range.start, mode: "lifetime" };
+  };
+  const inWin = (d, w) => { const t = parseDate(d); return !!t && t >= w.start && t <= rEnd; };
+  // cost
+  const srcs = new Map(); // srcKey → bucket
+  const vendorTot = new Map(); // shared vendor key → its total in range (all sources), for the drill-down share %
+  const bucket = (s) => { const k = srcKey(s); if (!srcs.has(k)) srcs.set(k, { key: k, name: model.nameOf(s), win: windowFor(s), cost: 0, vendor: 0, labor: 0, parts: new Map() }); return srcs.get(k); };
+  model.facts.forEach((f) => {
+    if (f.kind === "labor" && !withLabor) return;
+    const b = bucket(f.source); const sh = periodShare(f.start, f.end, b.win.start, rEnd); if (!sh) return;
+    const a = f.amount * sh; b.cost += a; if (f.kind === "labor") b.labor += a; else b.vendor += a;
+    const pk = f.kind === "labor" ? `L|${f.empId}` : `${f.category}|${f.vkey}`;
+    const p = b.parts.get(pk) || { label: f.kind === "labor" ? f.employee : f.vendor, sub: f.kind === "labor" ? f.title : f.category === "shared" ? "shared data" : f.category === "unmapped" ? "unmapped vendor" : "direct", kind: f.kind, amount: 0 };
+    p.amount += a; if (f.category === "shared") { p.vkey = f.vkey; vendorTot.set(f.vkey, (vendorTot.get(f.vkey) || 0) + a); } b.parts.set(pk, p);
+  });
+  srcs.forEach((b) => b.parts.forEach((p) => { if (p.vkey && vendorTot.get(p.vkey)) p.share = p.amount / vendorTot.get(p.vkey); }));
+  // outcomes
+  const leadsBy = new Map(), blendBy = new Map(), oppsBy = new Map(), aripBy = new Map(), closedBy = new Map(), openBy = new Map();
+  const addSet = (m, s, id) => { const k = srcKey(s); if (!m.has(k)) m.set(k, new Set()); m.get(k).add(id); };
+  (store.leads || []).forEach((r) => { if (!r.leadId) return; const b = bucket(r.source); if (inWin(r.date, b.win)) { addSet(leadsBy, r.source, r.leadId); addSet(blendBy, r.source, r.leadId); } });
+  (store.mkt_revives || []).forEach((r) => { if (!r.leadId || !/^dead$/i.test(String(r.oldValue ?? "").trim())) return; const b = bucket(r.source); if (inWin(r.date, b.win)) addSet(blendBy, r.source, r.leadId); });
+  (store.mkt_opps || []).forEach((r) => { if (!r.id) return; const b = bucket(r.source); if (inWin(r.date, b.win)) addSet(oppsBy, r.source, r.id); });
+  (store.arip_entered || []).forEach((r) => { if (!r.id) return; const b = bucket(r.source); if (inWin(r.date, b.win)) addSet(aripBy, r.source, r.id); });
+  model.closed.forEach((r) => { const b = bucket(r.source); if (inWin(r.closeDate, b.win)) { const k = srcKey(r.source); if (!closedBy.has(k)) closedBy.set(k, []); closedBy.get(k).push(r); } });
+  const fwdEnd = rangeFwd && rangeFwd.end > rEnd ? rangeFwd.end : rEnd; let pastDue = 0;
+  (store.pipeline || []).forEach((r) => { if (!isOpen(r.stage)) return; const b = bucket(r.source); const d = parseDate(r.closeDate); if (!d || d < b.win.start || d > fwdEnd) return;
+    const k = srcKey(r.source); const o = openBy.get(k) || { rev: 0, n: 0, pastDue: 0 }; o.rev += num(r.forecast); o.n++; if (d < sod(now)) { o.pastDue++; pastDue++; } openBy.set(k, o); });
+  // LTV constant: trailing 12 months when closed history reaches back that far, else YTD (as of today)
+  const t12Start = sod(addDays(now, -364)), ytdStart = new Date(now.getFullYear(), 0, 1);
+  const ltvMode = model.coverage.closed && model.coverage.closed <= addDays(t12Start, 31) ? "T12" : "YTD";
+  const ltvStart = ltvMode === "T12" ? t12Start : ytdStart;
+  const ltvRows = model.closed.filter((r) => { const d = parseDate(r.closeDate); return d && d >= ltvStart && d <= today; });
+  const ltvCust = mktCustomers(ltvRows).core.filter((g) => !g.unrealized);
+  const ltvCompany = ltvCust.length ? ltvCust.reduce((s, g) => s + g.rev, 0) / ltvCust.length : null;
+  const ltvBySrc = new Map(); ltvCust.forEach((g) => { const k = srcKey(g.src); const x = ltvBySrc.get(k) || { rev: 0, n: 0 }; x.rev += g.rev; x.n++; ltvBySrc.set(k, x); });
+  const ltvUnrealized = mktCustomers(ltvRows).core.length - ltvCust.length;
+  // rows
+  const div = (a, b) => (b ? a / b : null);
+  const rows = [...srcs.values()].map((b) => {
+    const k = b.key, cl = closedBy.get(k) || [];
+    const cu = mktCustomers(cl);
+    const closedRev = cl.reduce((s, r) => s + num(r.revenue), 0), open = openBy.get(k) || { rev: 0, n: 0, pastDue: 0 };
+    const hasLeadTab = model.coverage.leadsBySource.has(k); // no new-lead report for this source → no CPL / blended CPL
+    const leads = (leadsBy.get(k) || new Set()).size, blended = hasLeadTab ? (blendBy.get(k) || new Set()).size : 0;
+    const opps = (oppsBy.get(k) || new Set()).size, arips = (aripBy.get(k) || new Set()).size;
+    const core = cu.core.length, listing = cu.listing.length;
+    const sl = ltvBySrc.get(k); const ltvSrc = sl && sl.n ? sl.rev / sl.n : null;
+    const ltv = opts.ltvBasis === "source" ? ltvSrc : ltvCompany;
+    const cac = div(b.cost, core);
+    return { ...b, parts: [...b.parts.values()].sort((x, y) => y.amount - x.amount), leads, blended, opps, arips, core, listing, closedRev, openRev: open.rev, openN: open.n, openPastDue: open.pastDue,
+      cpl: div(b.cost, leads), cplBlended: div(b.cost, blended), cpo: div(b.cost, opps), cpa: div(b.cost, arips), cac, cacBlended: div(b.cost, core + listing),
+      ltv, ltvN: opts.ltvBasis === "source" ? (sl ? sl.n : 0) : ltvCust.length, ltvCac: ltv != null && cac ? ltv / cac : null,
+      roas: div(closedRev, b.cost), roasFc: div(closedRev + open.rev, b.cost) };
+  });
+  const paid = rows.filter((r) => r.cost > 0.005 && r.key !== srcKey(MKT_COST.unattributed)).sort((a, b) => b.cost - a.cost);
+  const unattr = rows.find((r) => r.key === srcKey(MKT_COST.unattributed) && r.cost > 0.005) || null;
+  const unpaid = rows.filter((r) => !(r.cost > 0.005) && r.key !== srcKey(MKT_COST.unattributed) && (r.closedRev || r.openRev)).sort((a, b) => (b.closedRev + b.openRev) - (a.closedRev + a.openRev));
+  const sum = (f) => paid.reduce((s, r) => s + (r[f] || 0), 0);
+  const tCost = sum("cost") + (unattr ? unattr.cost : 0), tCore = sum("core"), tRev = sum("closedRev"), tOpen = sum("openRev");
+  const total = { cost: tCost, vendor: sum("vendor") + (unattr ? unattr.vendor : 0), labor: sum("labor") + (unattr ? unattr.labor : 0), leads: sum("leads"), blended: sum("blended"), opps: sum("opps"), arips: sum("arips"), core: tCore, listing: sum("listing"), closedRev: tRev, openRev: tOpen, openN: sum("openN"),
+    cpl: div(tCost, sum("leads")), cplBlended: div(tCost, sum("blended")), cpo: div(tCost, sum("opps")), cpa: div(tCost, sum("arips")), cac: div(tCost, tCore), cacBlended: div(tCost, tCore + sum("listing")),
+    ltv: ltvCompany, ltvN: ltvCust.length, ltvCac: ltvCompany != null && tCore && tCost ? ltvCompany / (tCost / tCore) : null, roas: div(tRev, tCost), roasFc: div(tRev + tOpen, tCost) };
+  // flags: current-month bills not posted yet
+  const curYm = ymKey(now);
+  if (rEnd >= som(now)) {
+    const billed = new Map(); model.facts.forEach((f) => { if (f.kind !== "vendor") return; if (!billed.has(f.vendor)) billed.set(f.vendor, new Set()); billed.get(f.vendor).add(f.ym); });
+    const missing = [...billed.entries()].filter(([, s]) => !s.has(curYm) && Array.from({ length: MKT_COST.missingBillLookback }, (_, i) => curYm - 1 - i).every((k) => s.has(k))).map(([v]) => v);
+    if (missing.length) flags.push({ tone: "warn", text: `No bill posted yet for ${now.toLocaleDateString(undefined, { month: "short" })}: ${missing.join(", ")} — billed every month for the prior ${MKT_COST.missingBillLookback}, so this month's cost for their source is likely understated.` });
+  }
+  if (withLabor && model.coverage.laborEnd && rEnd > eod(model.coverage.laborEnd) && range.start <= model.coverage.laborEnd) flags.push({ tone: "warn", text: `Labor recorded through ${model.coverage.laborEnd.toLocaleDateString(undefined, { month: "short", day: "numeric" })} — contractor pay posts after each pay period closes, so labor for later days in this range isn't in the ledger yet.` });
+  else if (withLabor && model.coverage.laborEnd && range.start > eod(model.coverage.laborEnd)) flags.push({ tone: "warn", text: `No labor in this range yet — contractor pay is recorded through ${model.coverage.laborEnd.toLocaleDateString(undefined, { month: "short", day: "numeric" })}.` });
+  if (withLabor && model.coverage.labor && range.start < model.coverage.labor) flags.push({ tone: "info", text: `Labor unavailable before ${model.coverage.labor.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} — the contractor ledger starts there, so earlier dates are vendor spend only.` });
+  paid.forEach((r) => { if (r.win.pending) flags.push({ tone: "info", text: `${r.name}: ${r.win.pending}. Showing the selected period instead.` }); });
+  if (pastDue) flags.push({ tone: "info", text: `Forecast ROAS includes ${pastDue} open deal${pastDue === 1 ? "" : "s"} whose Close Date has passed but hasn't closed yet.` });
+  return { paid, unattr, unpaid, total, flags: [...model.flags, ...flags], ltvMode, ltvStart, ltvCompany, ltvN: ltvCust.length, ltvUnrealized, monthAligned };
+}
+
+const mkt$ = (v) => (v == null || !isFinite(v) ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const mkt$0 = (v) => (v == null || !isFinite(v) ? "—" : fmt(v, "currency"));
+const mktX = (v) => (v == null || !isFinite(v) ? "—" : (v >= 100 ? Math.round(v) : v.toFixed(1)) + "x");
+const mktN = (v) => (v ? v.toLocaleString() : "—");
+function MktSeg({ value, onChange, options, label }) {
+  return (<div className="flex items-center gap-2">
+    <span className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{label}</span>
+    <div className="inline-flex rounded-xl p-0.5" style={{ background: T.track }}>
+      {options.map(([v, l]) => (
+        <button key={String(v)} onClick={() => onChange(v)} className="text-[12px] font-medium px-3 py-1 rounded-md transition-colors whitespace-nowrap"
+          style={{ background: value === v ? T.card : "transparent", color: value === v ? T.ink : T.sub, boxShadow: value === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+    </div></div>);
+}
+function MktTable({ cols, rows, total, openKey, setOpenKey, withLabor }) {
+  const th = { borderBottom: `1px solid ${T.border}` }, td = { borderBottom: `1px solid ${T.border}`, fontVariantNumeric: "tabular-nums" };
+  const line = (r, isTotal) => (
+    <tr key={r.key || "total"} className={isTotal ? "" : "lh-row"} onClick={isTotal ? undefined : () => setOpenKey(openKey === r.key ? null : r.key)}
+      style={{ color: T.ink, cursor: isTotal ? "default" : "pointer", fontWeight: isTotal ? 700 : 400 }}>
+      <td className="py-2 px-2 whitespace-nowrap" style={{ ...td, fontWeight: 600 }}>
+        {!isTotal && <span style={{ color: T.faint, display: "inline-block", width: 12 }}>{openKey === r.key ? "▾" : "▸"}</span>}{r.name}
+        {r.win && r.win.mode === "lifetime" && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: T.accentSoft, color: T.accent }}>lifetime</span>}
+        {r.win && r.win.pending && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: T.warnSoft, color: T.warn }} title={r.win.pending}>lag ⚠</span>}
+      </td>
+      {cols.map((c) => <td key={c.key} className="py-2 px-2 text-right whitespace-nowrap" style={{ ...td, color: c.muted ? T.sub : T.ink }}>{c.f(r)}</td>)}
+    </tr>);
+  return (<div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+    <table className="w-full text-[13px]" style={{ borderCollapse: "collapse", minWidth: 760 }}>
+      <thead><tr className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>
+        <th className="py-2 px-2 text-left" style={th}>Lead source</th>
+        {cols.map((c) => <th key={c.key} className="py-2 px-2 text-right whitespace-nowrap" style={th} title={c.tip}>{c.label}</th>)}
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => (<React.Fragment key={r.key}>
+          {line(r)}
+          {openKey === r.key && (<tr><td colSpan={cols.length + 1} className="px-3 py-2" style={{ background: T.zebra, borderBottom: `1px solid ${T.border}` }}>
+            <div className="text-[11px] mb-1" style={{ color: T.faint }}>Cost components in this range{withLabor ? "" : " (labor off)"} — {mkt$0(r.cost)} total{r.labor ? ` · vendor ${mkt$0(r.vendor)} + labor ${mkt$0(r.labor)}` : ""}</div>
+            <div className="grid gap-x-6 gap-y-0.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
+              {r.parts.map((p) => (<div key={p.label + p.sub} className="flex justify-between text-[12px]" style={{ color: T.ink }}>
+                <span>{p.label} <span style={{ color: T.faint }}>· {p.sub}{p.share != null ? ` · ${Math.round(p.share * 1000) / 10}% of its bill` : ""}</span></span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{mkt$0(p.amount)}</span></div>))}
+            </div></td></tr>)}
+        </React.Fragment>))}
+        {total && line({ ...total, name: "All paid sources" }, true)}
+      </tbody>
+    </table></div>);
+}
+function MarketingEfficiency({ store, range, rangeFwd }) {
+  const [withLabor, setWithLabor] = useState(true);
+  const [ltvBasis, setLtvBasis] = useState("company");
+  const [openKey, setOpenKey] = useState(null);
+  const model = useMemo(() => buildMktCostModel(store), [store]);
+  const res = useMemo(() => (model.hasSpend ? mktEfficiency(model, store, range, rangeFwd, { withLabor, ltvBasis }) : null), [model, store, range, rangeFwd, withLabor, ltvBasis]);
+  if (!res) return (<Panel title="Spend & ROI"><div className="text-[13px]" style={{ color: T.sub }}>No marketing spend loaded — the PT2 Marketing workbook ("Marketing Spend COGS …" tab) didn't return rows.</div></Panel>);
+  const rows = res.unattr ? [...res.paid, { ...res.unattr, name: "Unattributed" }] : res.paid;
+  const costLabel = withLabor ? "Costs: Vendor + Labor" : "Costs: Vendor only";
+  const ltvLabel = `LTV: ${ltvBasis === "source" ? "each source's own" : "company"} avg fee · ${res.ltvMode === "T12" ? "trailing 12 mo" : "YTD"} (fixed)`;
+  const funnelCols = [
+    { key: "cost", label: "Spend", f: (r) => mkt$0(r.cost) },
+    { key: "leads", label: "Leads", f: (r) => mktN(r.leads), muted: true },
+    { key: "cpl", label: "CPL", f: (r) => mkt$(r.cpl), tip: "Spend ÷ new leads (Lead Create Date)" },
+    { key: "cplB", label: "Blended CPL", f: (r) => mkt$(r.cplBlended), tip: "Spend ÷ (new leads + Dead → New Lead revives), each lead once" },
+    { key: "opps", label: "Opps", f: (r) => mktN(r.opps), muted: true },
+    { key: "cpo", label: "Cost / opp", f: (r) => mkt$(r.cpo) },
+    { key: "arips", label: "ARIPs", f: (r) => mktN(r.arips), muted: true },
+    { key: "cpa", label: "Cost / ARIP", f: (r) => mkt$0(r.cpa) },
+  ];
+  const unitCols = [
+    { key: "cost", label: "Spend", f: (r) => mkt$0(r.cost) },
+    { key: "cust", label: "Customers", f: (r) => (r.core || r.listing ? `${r.core}${r.listing ? ` + ${r.listing} L` : ""}` : "—"), muted: true, tip: "Core sellers (Wholesale / Purchase, a front-end + back-end = one) + Listing sellers" },
+    { key: "cac", label: "CAC", f: (r) => mkt$0(r.cac), tip: "Spend ÷ core customers" },
+    { key: "cacB", label: "Blended CAC", f: (r) => mkt$0(r.cacBlended), tip: "Spend ÷ (core + Listing customers)" },
+    { key: "ltv", label: "LTV", f: (r) => (r.ltv == null ? "—" : `${mkt$0(r.ltv)}${ltvBasis === "source" ? ` (n=${r.ltvN})` : ""}`), muted: ltvBasis !== "source" },
+    { key: "ltvcac", label: "LTV:CAC", f: (r) => mktX(r.ltvCac) },
+    { key: "rev", label: "Closed rev", f: (r) => mkt$0(r.closedRev), muted: true },
+    { key: "roas", label: "ROAS actual", f: (r) => mktX(r.roas), tip: "Closed revenue (incl. Listing) ÷ spend" },
+    { key: "open", label: "Open pipeline", f: (r) => (r.openRev ? `${mkt$0(r.openRev)}` : "—"), muted: true, tip: "Open deals, Total Forecasted Revenue, Close Date through the end of the selected period (unweighted)" },
+    { key: "roasF", label: "ROAS forecast", f: (r) => mktX(r.roasFc), tip: "(Closed + open pipeline) ÷ spend" },
+  ];
+  const t = res.total;
+  return (<Panel title={`Spend & ROI — ${costLabel}`}>
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3">
+      <MktSeg label="Include labor" value={withLabor} onChange={setWithLabor} options={[[true, "On"], [false, "Off"]]} />
+      <MktSeg label="LTV basis" value={ltvBasis} onChange={setLtvBasis} options={[["company", "Company avg"], ["source", "By source"]]} />
+    </div>
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      {[["Attributed spend", mkt$0(t.cost), withLabor && t.labor ? `vendor ${mkt$0(t.vendor)} · labor ${mkt$0(t.labor)}` : "vendor spend"],
+        ["Blended CPL", mkt$(t.cpl), `${mktN(t.leads)} new leads · paid sources`],
+        ["ROAS actual", mktX(t.roas), `${mkt$0(t.closedRev)} closed`],
+        ["ROAS forecast", mktX(t.roasFc), `+ ${mkt$0(t.openRev)} open pipeline`],
+        ["LTV (avg fee)", mkt$0(res.ltvCompany), `${res.ltvMode} · ${res.ltvN} customers, fixed`]].map(([l, v, sub]) => (
+        <div key={l} className="rounded-xl p-3" style={{ background: T.track }}>
+          <div className="text-[11px] uppercase tracking-wide" style={{ color: T.faint }}>{l}</div>
+          <div className="text-[22px] font-bold leading-tight" style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>{v}</div>
+          <div className="text-[11px]" style={{ color: T.faint }}>{sub}</div></div>))}
+    </div>
+    <SubHead label="Cost per funnel stage" note="each count on its own date · new leads by Create Date · opps by Created Date · ARIPs by ARIP entry" />
+    <div className="mt-2 mb-5"><MktTable cols={funnelCols} rows={rows} total={t} openKey={openKey} setOpenKey={setOpenKey} withLabor={withLabor} /></div>
+    <SubHead label="Unit economics & ROAS" note={ltvLabel} />
+    <div className="mt-2"><MktTable cols={unitCols} rows={rows} total={t} openKey={openKey} setOpenKey={setOpenKey} withLabor={withLabor} /></div>
+    {res.unpaid.length > 0 && (<div className="text-[12px] mt-3" style={{ color: T.sub }}>
+      <b>No attributed spend:</b> {res.unpaid.map((r) => `${r.name} ${mkt$0(r.closedRev)} closed${r.openRev ? ` + ${mkt$0(r.openRev)} open` : ""}`).join(" · ")}</div>)}
+    {res.flags.length > 0 && (<div className="flex flex-col gap-1 mt-3">
+      {res.flags.map((f, i) => (<div key={i} className="text-[11px] rounded-md px-2 py-1" style={{ background: f.tone === "warn" ? T.warnSoft : T.track, color: f.tone === "warn" ? T.warn : T.sub }}>{f.tone === "warn" ? "⚠ " : "ⓘ "}{f.text}</div>))}
+    </div>)}
+    <div className="text-[11px] mt-3 leading-relaxed" style={{ color: T.faint }}>
+      Spend is QuickBooks vendor spend mapped by the <b>Vendor x Lead Source</b> tab — Software/Service vendors go straight to their source; <b>Data</b> vendors are split by each source's Software+Service spend over the trailing {MKT_COST.weightMonths} months. Labor is Rippling contractor pay for <b>Marketing Spend - Roster</b> employees (title "Call Center" → Call Center, "Texting" → Text Message Campaign), spread over each pay period.
+      Customers merge a front-end with its back-end; a back-end whose front-end closed earlier adds revenue but no new customer. LTV is the average fee per core customer, fixed at the {res.ltvMode === "T12" ? "trailing-12-month" : "year-to-date"} value; Listing is excluded from LTV but its revenue counts in ROAS. $0 front-ends awaiting their back-end are left out of LTV{res.ltvUnrealized ? ` (${res.ltvUnrealized} now)` : ""}. Click a row for its cost components.
+    </div>
+  </Panel>);
+}
+
 function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) {
   // Marketing & Speed-to-Lead hide Team/Rep, so they compute company-wide regardless of what was selected elsewhere.
   const org = useMemo(() => scopeOrgForView(rawOrg, view), [rawOrg, view]);
@@ -2965,6 +3413,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
   const [apptTab, setApptTab] = useState("showrate"); // merged Sales appointments panel: showrate | funnel | outcomes | breakout
   const [oneOnOne, setOneOnOne] = useState(false); // "1-on-1 format" toggle: the consolidated Focus view. Off by default.
   const [txSub, setTxSub] = useState("coordination"); // Transactions view sub-tabs: coordination | dispositions
+  const [mktSub, setMktSub] = useState("funnel"); // Marketing view sub-tabs: funnel (lead funnel) | spend (Spend & ROI)
   const isMktView = view === "marketing";
   const isTxView = view === "transactions";
   const inDir = useMemo(() => directorySet(dir), [dir]); // directory membership gate for per-rep tables
@@ -3494,6 +3943,16 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
           style={{ background: txSub === v ? T.card : "transparent", color: txSub === v ? T.ink : T.sub, boxShadow: txSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
     </div>) : null;
 
+  const mktSubToggle = isMktView ? (
+    <div className="inline-flex rounded-xl p-0.5 self-start" style={{ background: T.track }}>
+      {[["funnel", "Lead Funnel"], ["spend", "Spend & ROI"]].map(([v, l]) => (
+        <button key={v} onClick={() => setMktSub(v)} className="text-[13px] font-medium px-3 py-1.5 rounded-md transition-colors whitespace-nowrap"
+          style={{ background: mktSub === v ? T.card : "transparent", color: mktSub === v ? T.ink : T.sub, boxShadow: mktSub === v ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>{l}</button>))}
+    </div>) : null;
+
+  if (isMktView && mktSub === "spend") return (
+    <div className="flex flex-col gap-5">{mktSubToggle}<MarketingEfficiency store={store} range={range} rangeFwd={rangeFwd} /></div>);
+
   if (isTxView && txSub === "dispositions") return (
     <div className="flex flex-col gap-5">{txSubToggle}<DispositionsView store={store} range={range} dir={dir} /></div>);
 
@@ -3501,7 +3960,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
     <div className="flex flex-col gap-5">{txSubToggle}<ComingSoon title="Field Operations" note="Field Operations KPIs are coming soon — the sub-tab is scaffolded and will fill in once its metrics and data source are defined." /></div>);
 
   return (<div className="flex flex-col gap-5">
-    {txSubToggle}
+    {txSubToggle}{mktSubToggle}
     {(!isTxView && !isMktView) ? (<>
       {focusEligible && (
         <div className="flex items-center gap-2 flex-wrap">
@@ -3875,7 +4334,7 @@ function ExecutiveDashboard({ store, dir, org: rawOrg, range, rangeFwd, view }) 
         })() : <div className="text-[13px] py-8 text-center" style={{ color: T.sub }}>No opportunities reached these stages in the selected period.</div>}
       </Panel>
       <Panel title="Marketing view">
-        <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Spend/CPL isn't in the current sync, so cost-per-lead and ROAS aren't available yet.</div>
+        <div className="text-[12px]" style={{ color: T.sub }}>Company-level lead-funnel metrics — leads and opps carry no individual rep, so only the Period filter applies. "Avg Lead ICP" is the mean Total Tier 1 ICP (0–7) across leads in the period. Cost per lead, CAC and ROAS are on the <b>Spend &amp; ROI</b> sub-tab (PT2 Marketing workbook).</div>
       </Panel>
     </>) : (<>
     {!vpDrill && !amFuDrill && (<Panel collapsible title="Appointments">
@@ -4170,6 +4629,6 @@ export default function App() {
         <span>· data current through {f.map((x) => `${x.label} ${fmtD(x.date)}`).join(" · ")}</span>
       </div>); })()}
     <Notes diagnostics={st.diagnostics} mode={st.mode} freshness={st.store ? dataFreshness(st.store) : []} />
-    <details className="mt-5 text-[11px]" style={{ color: T.faint }}><summary style={{ cursor: "pointer", color: T.sub, userSelect: "none" }}>Details · build &amp; source</summary><p className="mt-2 leading-relaxed" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-17 · v2-features-r80 (Accuracy panel reworked. (1) Deltas are now explicitly absolute so over- and under-valuations never cancel: headline "Avg |delta|" / "Median |delta|", plus a second row splitting the absolute miss into deals that sold OVER as-is (UW under-valued) vs UNDER as-is (UW over-valued), each with its own avg |delta| and count, and a non-cancelling "Sold under as-is" share replacing the old signed directional-bias number. (2) Attribution to team members everywhere possible: added "By due diligence specialist" breakouts alongside "By underwriter" in BOTH the cycle and accuracy panels. (3) The bottom chart now plots avg |delta| (left axis) AND deals closed (right axis) per close month as two color-coded bars on one dual-axis chart, with a small legend. Prior r79: (Added an "Avg fee size" tile to the accuracy panel — average realized revenue per closed deal, pulled from the Closed Opps join (Total Forecasted Revenue) that already supplies each deal's close date, so it follows the same close-date window; the sub shows how many of the in-window deals carry a fee. Live YTD avg ≈ $41K/deal (median ≈ $33K). Prior r78:Fixed "Awaiting UW". It was riding the date filter — it counted only pending underwrites whose appointment was set inside the selected window, so a narrow window showed a fraction (e.g. 391) of the real queue. A UW queue is a live snapshot, so it now ignores the date range entirely and counts every open underwrite (appt set, not yet complete), still honoring the Team/Rep scope; the tile is tagged "as of now" to match. The rest of the cycle panel (completed / median / p90 / distribution / by-underwriter / trend) stays windowed by appt-set date. Verified against live data: 756 genuinely-open opps (none future-dated, none already underwritten elsewhere, no duplicate opps). Prior r77:Back-End flip accuracy can now take the front-end opp's ARV directly from a "Front-End Opportunity: ARV" column on the row when present — no name matching, stable. Resolution order for a flip's basis is now: direct front-end ARV column → front-end matched by Opportunity Name → the back-end's own ARV → skip. The column is null today so behavior is unchanged until the report adds it (a "Front-End Opportunity: Opportunity ID" candidate is also read for a future stable join). Prior r76:Fixed the accuracy "Deals scored" cohort math. After the strict close-date gate went in (r75), the tile's denominator still used all closed rows while the scored count was in-window, so a narrow window showed e.g. "90 closed rows · 85 skipped (no basis/price)" — mislabeling out-of-window deals as missing a basis. The date gate now runs first and the cohort ("N closed in window") plus the skip count ("no basis/price") are both measured against the in-window set only; the flip-no-ARV counter likewise counts in-window flips only. All-time is unchanged (90 in window, 81 scored, 9 skipped). Prior r75:Underwriting date axes finalized. Cycle time is now windowed by appt-set date ("Date/Time is Appt Set") — the window shows the deals UW was requested on rather than the ones completed in it; this also fixes the "Awaiting UW" backlog, which under the old UW-complete axis was dropped to zero by any non-all-time window (pending rows have no complete date). The median-cycle-by-month trend regroups by appt-set month, and the cycle tag/labels updated to say "by appt-set date". Accuracy stays windowed by close date (Opp-ID join to Closed Opps) and is now strict: a closed deal with no matched close date appears only under the All-time window instead of in every window. Also fixed the accuracy as-is fallback to read the real second-column header "As Is Valuation.1" (the live sheet suffixes the duplicate) in addition to the de-dup form. Prior r74: Underwriting tab went live — Added a dedicated "ARIP → Deal Review by rep" breakout to the 1-on-1 AM/FU Focus view: a per-rep bar list of every AM and Follow-Up rate (reached ÷ entered, with the underlying counts), sourced from the Arips-to-Deal-Review report and credited by AM / Follow-Up tag. The team-blended % stays as the Results-row tile. Prior r72: The consolidated Focus view (VP Focus / AM-FU Focus) is now an opt-in "1-on-1 format" toggle rather than an automatic replacement: a Format switch (Default | 1-on-1 format) appears at the top of the Sales view whenever the scope is a VP or AM/FU team/rep. Default is OFF, so every scope — including VP and AM/FU teams — shows the classic Lagging/Leading grids, appointments panel, leaderboard, scorecard and conversion table by default; switching to "1-on-1 format" swaps in the consolidated Focus section. Prior r71: AM / FU Focus per-rep breakout: the separate Per-AM and Per-FU tables are now combined into ONE breakout (columns = Acquisition Managers first, then Follow-Up Specialists); a single-role scope still titles it "Per-AM"/"Per-FU" breakout, the mixed AM+FU scope titles it "Per-rep breakout". Prior r70: Per-rep breakout table (Per-AM / Per-FU / Per-VP): fixed the metric-name column collapsing to nothing once there were ~5+ reps — the old width formula (100 − reps×22%) went negative — by giving the metric column a fixed 200px width and letting rep columns share the rest. The metric column is now frozen when scrolling horizontally and the rep-name header row is frozen when scrolling vertically (a bounded scroll box with sticky cells); a print override drops the freeze/height so PDF export still renders the full table. Prior r69: AM / FU Focus tile layout reworked: Pipeline (forecast) and Closed Revenue are pulled out into a larger "Revenue" hero row above everything; the Results row drops to six tiles (Opps→ARIP, Deals Out of ARIP, ARIP→Deal Review, Revenue Out of ARIP, Avg Deal, Deals Closed); call metrics get their own "Call activity" row with a new Outbound Calls tile (outbound count + avg outbound duration) alongside the all-calls Calls Logged tile, Talk Time and QCs; the per-rep breakout gains Outbound calls + Avg outbound rows. Prior r68: Fixed AM / FU Focus "ARIP → Deal Review %": it was sourced from the transactions-workbook stage-history, which does not carry Acquisition-Manager / Follow-Up attribution, so the cohort came back empty (showed "no ARIP cohort") under AM/FU scope. It now reads the AM/FU-attributed "Arips to Deal Review" report (New Value = Deal Review, out-of-ARIP flag) — the same source the Rep scorecard's ARIP→Review column uses — over opps entering ARIP as the denominator, and it attributes to both the Acquisition Manager and the Follow-Up Specialist. Prior r67: AM / FU Focus "Appointments set" card now uses a split date axis: the set counts (Total / In Person / Virtual / Follow Up) count by appointment Created Date (when booked), while the show rate counts by Start date (whether the meeting fell in the window) — matching how appointments are set vs. attended. The per-rep breakout set-counts follow suit. Prior r66: AM / FU Focus call activity now counts every logged call rather than only outbound — matching the standalone Calls Logged tile — and the tile/breakout row are relabeled "Calls Logged". VP Focus still uses outbound-only, unchanged. Prior r65: Added a consolidated AM / FU Focus section that renders at the top of Sales whenever scope is the Acquisition Managers team, the Follow-Up Specialists team, the combined AMs+Follow-Up union, or a single AM/FU rep — mirroring the VP Focus layout. Appointments are credited to the rep who SET them (Created By); ARIP, revenue and deals are credited wherever the rep is tagged on the opp (Acquisition Manager 1/2 or Follow-Up). Two tile rows (Results: Opps→ARIP, Deals Out of ARIP, ARIP→Deal Review, Revenue Out of ARIP, Pipeline, Avg Deal, Deals Closed, Closed Revenue · Activity: Appts Set, Talk Time, Outbound Calls, QCs, Opps Created, Leads Claimed, Leads Deaded, Avg ICP), then card ① Appts attended→ARIP split In-Person vs Virtual+Follow-Up, card ② Appointments set with counts + show rate by type + blended, and a per-rep breakout split into an AM block and an FU block. Opps Assigned and Contracts Sent are dropped as VP-only. The usual Sales grids/panels are hidden under AM/FU scope, same as VP scope. Prior r64: Refined the metric order within each Per-VP section: Funnel & ARIP runs counts→ratios (Opps Assigned, Opps→ARIP, Deals Out of ARIP, then the conversion ratios, then ARIP→Deal Review); Appointments pairs each count with its show rate; Activity groups the call metrics together; Revenue runs pipeline→closed→efficiency. Prior r63: Per-VP breakout readability: metric labels brightened to full-contrast (from muted), row dividers strengthened, and zebra striping contrast increased across tables so rows are much easier to follow. Prior r62: Per-VP breakout is now comprehensive — it lists EVERY metric shown in the VP view (added Opps Assigned, Opps → ARIP, Deals Out of ARIP, Opps Created/Deaded, Avg ICP, Deals Closed, Avg Deal Size, Revenue Out of ARIP), grouped Funnel&ARIP / Appointments / Activity / Revenue — and the card is full-width like the other sections, VP names right-justified, metric names left. Prior r61: VP tiles refined: renamed "Deals → ARIP" to "Opps → ARIP" (it collided with "Deals Out of ARIP"); added a short one-line note clarifying that Opps → ARIP / Deals Out of ARIP / ARIP → Deal Review are three different measures; balanced both rows to 8 tiles — Results adds Deals Closed, Activity adds Opps Assigned + splits Outbound Calls out from Talk Time. Prior r60: Reorganized the VP view: metric tiles now sit ABOVE the VP Focus workspace in two aligned 7-tile rows — a "Results" row (ARIP→Deal Review, Deals→ARIP, Deals Out of ARIP, Revenue Out of ARIP, Pipeline, Avg Deal Size, Closed Revenue) then an "Activity & other" row (Contracts Sent, Talk Time, QCs, Deals Closed, Opps Created, Opps Deaded, Avg ICP) — followed by the VP Focus appointment-funnel cards and the Per-VP breakout. Re-added the "Deals → ARIP" tile. Incl. r59 Conversion by rep is back and now SCOPE-AWARE: All view shows every rep; a team scope shows that team's reps; a single rep shows that rep's team. Moved it to the bottom of the Sales view, under Revenue & pipeline. (Revenue attributed by VP stays All-view-only as a company VP comparison.) — they were rendering under team scopes (e.g. Vice Presidents) while still listing every rep/role, which read as inconsistent with the scoped header. Under a team scope the per-VP breakout covers the scoped people. Prior r57: Per-VP breakout card is now centered within its full-width section instead of left-aligned. Prior r56: De-cluttered the tiles under VP Focus: dropped the "N ·" number prefixes and uppercase labels, calmer VpStat tiles with more padding + consistent heights, and split them into two clearly-labeled groups ("Output" and "More metrics") instead of two cramped identical rows. Per-VP breakout re-balanced: instead of the packed table with a big empty right, it now fills a sized card (that sits cleanly on the grid texture) with fixed even columns + zebra so values line up and read as a tidy matrix. Prior r55: Palette tuned to the live Leverage site colors (deep navy, deep teal, mint, off-white); added a subtle site-style grid texture across the whole dashboard background (cards sit opaque on top); reworked the two data tables that read poorly — Per-VP breakout columns packed so the VPs sit beside the metric labels instead of flung to the edges, both tables get zebra striping, taller rows, and sentence-case headers, and Conversion-by-rep drops the heavy heat-shaded cells for a restrained clean read. Prior r54: Brand-polish refinement pass: subtle hover states on cards, table rows, tabs, and filters; softer branded chart tooltips (opaque card, rounded, shadow); section sub-headers de-capsed to sentence case with stronger contrast; smoother transitions throughout — all visual-only. Prior r53: Visual-only Leverage brand refresh — palette moved to deep navy / Leverage teal / mint / off-white: light mode drops the beige/gold for an off-white bg + clean white cards; dark mode keeps the navy foundation but swaps the generic green accent for the Leverage teal/mint family. Softer, larger corner radii; a restrained teal→navy gradient on the header; soft branded shadows with lighter borders; the main tabs use a soft teal selected-fill instead of a hard card; build/source history tucked behind this Details disclosure while the data-freshness line stays visible. No layout, section-order, metric, calculation, or VP Focus structural changes. Prior r52: VP layout: the Deals Closed / Avg Deal / Deals&Rev Out of ARIP / Opps Created&Deaded / Avg ICP tile strip moved up to sit directly above the Per-VP breakout, with a print page-break after the ARIP-&rarr;Deal-Review outcome-tile row so the strip + breakout start on a fresh PDF page. Per-VP breakout redesigned: transposed to metrics-down / VPs-across and grouped (Funnel / Appointments / Activity / Revenue) so it reads without a wide horizontal scroll. Prior r51: Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p></details>
+    <details className="mt-5 text-[11px]" style={{ color: T.faint }}><summary style={{ cursor: "pointer", color: T.sub, userSelect: "none" }}>Details · build &amp; source</summary><p className="mt-2 leading-relaxed" style={{ color: T.faint }}>Phase 3 · auto-tab-union model · {st.mode === "google" ? "live Sheets via public API key" : "sample data (set API_KEY to go live)"} · build 2026-09-24 · v2-features-r82 (Marketing tab split into two sub-tabs: "Lead Funnel" (default — the existing lead / opp / appointment / conversion / ICP tiles and panels, unchanged) and "Spend & ROI" (the r81 cost panel, now on its own sub-tab). Prior r81: Marketing efficiency panel added to the Marketing tab, fed by the new PT2 Marketing workbook. Spend = QuickBooks vendor spend (all-time pivot, unpivoted by month) mapped to lead source by the "Vendor x Lead Source - Context" tab: Software/Service vendors direct, Data vendors split by each source's trailing-3-month Software+Service spend, unmapped vendors shown as Unattributed. Labor = Rippling contractor pay for roster employees (legal first+last name match → title keyword: Call Center / Texting), spread over each pay period; "Include labor" toggle (default on). Per source: CPL (new leads by Create Date), blended CPL (+ Dead → New Lead revives), cost per opp (all opps), cost per ARIP, CAC (core customers; front-end + back-end = one; orphan back-ends add revenue only), blended CAC (+ Listing), LTV fixed at YTD avg fee (trailing 12 once Closed Opps history exists; company or by-source toggle; Listing and $0 front-ends excluded), LTV:CAC, ROAS actual and forecast (+ unweighted open pipeline through period end, past-due included). Sub-month ranges prorate by business days and are labeled estimated; "no bill posted yet" flag for vendors billed each of the prior 3 months; Direct Mail set to a lifetime window that activates once lead/closed history covers its spend. Prior r80: Accuracy panel reworked. (1) Deltas are now explicitly absolute so over- and under-valuations never cancel: headline "Avg |delta|" / "Median |delta|", plus a second row splitting the absolute miss into deals that sold OVER as-is (UW under-valued) vs UNDER as-is (UW over-valued), each with its own avg |delta| and count, and a non-cancelling "Sold under as-is" share replacing the old signed directional-bias number. (2) Attribution to team members everywhere possible: added "By due diligence specialist" breakouts alongside "By underwriter" in BOTH the cycle and accuracy panels. (3) The bottom chart now plots avg |delta| (left axis) AND deals closed (right axis) per close month as two color-coded bars on one dual-axis chart, with a small legend. Prior r79: (Added an "Avg fee size" tile to the accuracy panel — average realized revenue per closed deal, pulled from the Closed Opps join (Total Forecasted Revenue) that already supplies each deal's close date, so it follows the same close-date window; the sub shows how many of the in-window deals carry a fee. Live YTD avg ≈ $41K/deal (median ≈ $33K). Prior r78:Fixed "Awaiting UW". It was riding the date filter — it counted only pending underwrites whose appointment was set inside the selected window, so a narrow window showed a fraction (e.g. 391) of the real queue. A UW queue is a live snapshot, so it now ignores the date range entirely and counts every open underwrite (appt set, not yet complete), still honoring the Team/Rep scope; the tile is tagged "as of now" to match. The rest of the cycle panel (completed / median / p90 / distribution / by-underwriter / trend) stays windowed by appt-set date. Verified against live data: 756 genuinely-open opps (none future-dated, none already underwritten elsewhere, no duplicate opps). Prior r77:Back-End flip accuracy can now take the front-end opp's ARV directly from a "Front-End Opportunity: ARV" column on the row when present — no name matching, stable. Resolution order for a flip's basis is now: direct front-end ARV column → front-end matched by Opportunity Name → the back-end's own ARV → skip. The column is null today so behavior is unchanged until the report adds it (a "Front-End Opportunity: Opportunity ID" candidate is also read for a future stable join). Prior r76:Fixed the accuracy "Deals scored" cohort math. After the strict close-date gate went in (r75), the tile's denominator still used all closed rows while the scored count was in-window, so a narrow window showed e.g. "90 closed rows · 85 skipped (no basis/price)" — mislabeling out-of-window deals as missing a basis. The date gate now runs first and the cohort ("N closed in window") plus the skip count ("no basis/price") are both measured against the in-window set only; the flip-no-ARV counter likewise counts in-window flips only. All-time is unchanged (90 in window, 81 scored, 9 skipped). Prior r75:Underwriting date axes finalized. Cycle time is now windowed by appt-set date ("Date/Time is Appt Set") — the window shows the deals UW was requested on rather than the ones completed in it; this also fixes the "Awaiting UW" backlog, which under the old UW-complete axis was dropped to zero by any non-all-time window (pending rows have no complete date). The median-cycle-by-month trend regroups by appt-set month, and the cycle tag/labels updated to say "by appt-set date". Accuracy stays windowed by close date (Opp-ID join to Closed Opps) and is now strict: a closed deal with no matched close date appears only under the All-time window instead of in every window. Also fixed the accuracy as-is fallback to read the real second-column header "As Is Valuation.1" (the live sheet suffixes the duplicate) in addition to the de-dup form. Prior r74: Underwriting tab went live — Added a dedicated "ARIP → Deal Review by rep" breakout to the 1-on-1 AM/FU Focus view: a per-rep bar list of every AM and Follow-Up rate (reached ÷ entered, with the underlying counts), sourced from the Arips-to-Deal-Review report and credited by AM / Follow-Up tag. The team-blended % stays as the Results-row tile. Prior r72: The consolidated Focus view (VP Focus / AM-FU Focus) is now an opt-in "1-on-1 format" toggle rather than an automatic replacement: a Format switch (Default | 1-on-1 format) appears at the top of the Sales view whenever the scope is a VP or AM/FU team/rep. Default is OFF, so every scope — including VP and AM/FU teams — shows the classic Lagging/Leading grids, appointments panel, leaderboard, scorecard and conversion table by default; switching to "1-on-1 format" swaps in the consolidated Focus section. Prior r71: AM / FU Focus per-rep breakout: the separate Per-AM and Per-FU tables are now combined into ONE breakout (columns = Acquisition Managers first, then Follow-Up Specialists); a single-role scope still titles it "Per-AM"/"Per-FU" breakout, the mixed AM+FU scope titles it "Per-rep breakout". Prior r70: Per-rep breakout table (Per-AM / Per-FU / Per-VP): fixed the metric-name column collapsing to nothing once there were ~5+ reps — the old width formula (100 − reps×22%) went negative — by giving the metric column a fixed 200px width and letting rep columns share the rest. The metric column is now frozen when scrolling horizontally and the rep-name header row is frozen when scrolling vertically (a bounded scroll box with sticky cells); a print override drops the freeze/height so PDF export still renders the full table. Prior r69: AM / FU Focus tile layout reworked: Pipeline (forecast) and Closed Revenue are pulled out into a larger "Revenue" hero row above everything; the Results row drops to six tiles (Opps→ARIP, Deals Out of ARIP, ARIP→Deal Review, Revenue Out of ARIP, Avg Deal, Deals Closed); call metrics get their own "Call activity" row with a new Outbound Calls tile (outbound count + avg outbound duration) alongside the all-calls Calls Logged tile, Talk Time and QCs; the per-rep breakout gains Outbound calls + Avg outbound rows. Prior r68: Fixed AM / FU Focus "ARIP → Deal Review %": it was sourced from the transactions-workbook stage-history, which does not carry Acquisition-Manager / Follow-Up attribution, so the cohort came back empty (showed "no ARIP cohort") under AM/FU scope. It now reads the AM/FU-attributed "Arips to Deal Review" report (New Value = Deal Review, out-of-ARIP flag) — the same source the Rep scorecard's ARIP→Review column uses — over opps entering ARIP as the denominator, and it attributes to both the Acquisition Manager and the Follow-Up Specialist. Prior r67: AM / FU Focus "Appointments set" card now uses a split date axis: the set counts (Total / In Person / Virtual / Follow Up) count by appointment Created Date (when booked), while the show rate counts by Start date (whether the meeting fell in the window) — matching how appointments are set vs. attended. The per-rep breakout set-counts follow suit. Prior r66: AM / FU Focus call activity now counts every logged call rather than only outbound — matching the standalone Calls Logged tile — and the tile/breakout row are relabeled "Calls Logged". VP Focus still uses outbound-only, unchanged. Prior r65: Added a consolidated AM / FU Focus section that renders at the top of Sales whenever scope is the Acquisition Managers team, the Follow-Up Specialists team, the combined AMs+Follow-Up union, or a single AM/FU rep — mirroring the VP Focus layout. Appointments are credited to the rep who SET them (Created By); ARIP, revenue and deals are credited wherever the rep is tagged on the opp (Acquisition Manager 1/2 or Follow-Up). Two tile rows (Results: Opps→ARIP, Deals Out of ARIP, ARIP→Deal Review, Revenue Out of ARIP, Pipeline, Avg Deal, Deals Closed, Closed Revenue · Activity: Appts Set, Talk Time, Outbound Calls, QCs, Opps Created, Leads Claimed, Leads Deaded, Avg ICP), then card ① Appts attended→ARIP split In-Person vs Virtual+Follow-Up, card ② Appointments set with counts + show rate by type + blended, and a per-rep breakout split into an AM block and an FU block. Opps Assigned and Contracts Sent are dropped as VP-only. The usual Sales grids/panels are hidden under AM/FU scope, same as VP scope. Prior r64: Refined the metric order within each Per-VP section: Funnel & ARIP runs counts→ratios (Opps Assigned, Opps→ARIP, Deals Out of ARIP, then the conversion ratios, then ARIP→Deal Review); Appointments pairs each count with its show rate; Activity groups the call metrics together; Revenue runs pipeline→closed→efficiency. Prior r63: Per-VP breakout readability: metric labels brightened to full-contrast (from muted), row dividers strengthened, and zebra striping contrast increased across tables so rows are much easier to follow. Prior r62: Per-VP breakout is now comprehensive — it lists EVERY metric shown in the VP view (added Opps Assigned, Opps → ARIP, Deals Out of ARIP, Opps Created/Deaded, Avg ICP, Deals Closed, Avg Deal Size, Revenue Out of ARIP), grouped Funnel&ARIP / Appointments / Activity / Revenue — and the card is full-width like the other sections, VP names right-justified, metric names left. Prior r61: VP tiles refined: renamed "Deals → ARIP" to "Opps → ARIP" (it collided with "Deals Out of ARIP"); added a short one-line note clarifying that Opps → ARIP / Deals Out of ARIP / ARIP → Deal Review are three different measures; balanced both rows to 8 tiles — Results adds Deals Closed, Activity adds Opps Assigned + splits Outbound Calls out from Talk Time. Prior r60: Reorganized the VP view: metric tiles now sit ABOVE the VP Focus workspace in two aligned 7-tile rows — a "Results" row (ARIP→Deal Review, Deals→ARIP, Deals Out of ARIP, Revenue Out of ARIP, Pipeline, Avg Deal Size, Closed Revenue) then an "Activity & other" row (Contracts Sent, Talk Time, QCs, Deals Closed, Opps Created, Opps Deaded, Avg ICP) — followed by the VP Focus appointment-funnel cards and the Per-VP breakout. Re-added the "Deals → ARIP" tile. Incl. r59 Conversion by rep is back and now SCOPE-AWARE: All view shows every rep; a team scope shows that team's reps; a single rep shows that rep's team. Moved it to the bottom of the Sales view, under Revenue & pipeline. (Revenue attributed by VP stays All-view-only as a company VP comparison.) — they were rendering under team scopes (e.g. Vice Presidents) while still listing every rep/role, which read as inconsistent with the scoped header. Under a team scope the per-VP breakout covers the scoped people. Prior r57: Per-VP breakout card is now centered within its full-width section instead of left-aligned. Prior r56: De-cluttered the tiles under VP Focus: dropped the "N ·" number prefixes and uppercase labels, calmer VpStat tiles with more padding + consistent heights, and split them into two clearly-labeled groups ("Output" and "More metrics") instead of two cramped identical rows. Per-VP breakout re-balanced: instead of the packed table with a big empty right, it now fills a sized card (that sits cleanly on the grid texture) with fixed even columns + zebra so values line up and read as a tidy matrix. Prior r55: Palette tuned to the live Leverage site colors (deep navy, deep teal, mint, off-white); added a subtle site-style grid texture across the whole dashboard background (cards sit opaque on top); reworked the two data tables that read poorly — Per-VP breakout columns packed so the VPs sit beside the metric labels instead of flung to the edges, both tables get zebra striping, taller rows, and sentence-case headers, and Conversion-by-rep drops the heavy heat-shaded cells for a restrained clean read. Prior r54: Brand-polish refinement pass: subtle hover states on cards, table rows, tabs, and filters; softer branded chart tooltips (opaque card, rounded, shadow); section sub-headers de-capsed to sentence case with stronger contrast; smoother transitions throughout — all visual-only. Prior r53: Visual-only Leverage brand refresh — palette moved to deep navy / Leverage teal / mint / off-white: light mode drops the beige/gold for an off-white bg + clean white cards; dark mode keeps the navy foundation but swaps the generic green accent for the Leverage teal/mint family. Softer, larger corner radii; a restrained teal→navy gradient on the header; soft branded shadows with lighter borders; the main tabs use a soft teal selected-fill instead of a hard card; build/source history tucked behind this Details disclosure while the data-freshness line stays visible. No layout, section-order, metric, calculation, or VP Focus structural changes. Prior r52: VP layout: the Deals Closed / Avg Deal / Deals&Rev Out of ARIP / Opps Created&Deaded / Avg ICP tile strip moved up to sit directly above the Per-VP breakout, with a print page-break after the ARIP-&rarr;Deal-Review outcome-tile row so the strip + breakout start on a fresh PDF page. Per-VP breakout redesigned: transposed to metrics-down / VPs-across and grouped (Funnel / Appointments / Activity / Revenue) so it reads without a wide horizontal scroll. Prior r51: Bars now use traffic-light conditional formatting vs target — under 70% red, 70-99% yellow, 100%+ green — replacing the neutral-grey bars from r50; bars without a target fall back to accent green. KPI status warn threshold moved to 70%. Per-rep breakout bars (filtered and All-view team sections) are colored by each rep's role target where one exists. Prior r50: VP-scope de-clutter + design pass: (1) VP Focus is now the hero — the full Lagging/Leading card grids are replaced by one compact strip of the metrics VP Focus doesn't already show (Deals Closed, Avg Deal, Deals/Rev Out of ARIP, Opps Created/Deaded, Avg ICP); (2) one per-rep table instead of four — Team leaderboard, Revenue-by-VP, and Rep scorecard hidden for VP scope, with Rev/opp & Rev/appt folded into the Per-VP breakout; (3) Conversion-by-rep kept & trimmed as the single team drill-down; (4) the three revenue/pipeline charts consolidated into one panel; (5) global polish: removed ~20 per-tile LIVE badges for one freshness line up top, neutral-grey breakout bars (accent reserved for headline/status), removed unused chrome. Prior r49: VP Focus set-count-by-type AND show-rate-by-type now shown separately for both self-set appointments (③) and assigned-by-others appointments (④) — never combined. Prior r48: Fixed VP Focus metric #1: it is now OPPORTUNITIES assigned to the VP → ARIP (sourced from the Opps Assigned report, self-set = the VP created the opp), not appointments assigned. #2 attended→ARIP unchanged. Prior r47: VP Focus redesigned for readability + to sit natively in the dashboard: switched from a bright accent-bordered mega-card to the standard tile/card language, aligned breakout columns, cleaner ratio typography. Both the assigned and attended funnels now carry a self-set vs by-others routing breakout. Prior r46: Team/Rep filter scoped to the active tab's department — the Sales tab lists only Sales teams (Acquisition Managers, Follow-Up, Vice Presidents, Listing Partners, AMs+FU), and Underwriting only Underwriters; Dispositions/Transactions teams no longer bleed into Sales. A tab switch drops any out-of-department Team/Rep selection. Prior r45: VP drilldown revised: ARIP is now the count of the VP's opps entering ARIP in the SAME window (not a per-appointment name-join); assigned-&rarr;ARIP flags self-set (VP set it themselves) vs set-by-others; every metric gets a per-VP breakout table on the VP-team scope. Prior: consolidated "VP Focus" section renders at the top of Sales when scoped to the VP team or a single VP — appts-assigned→ARIP (by setter), appts-attended→ARIP by type (In Person/Virtual/Follow Up), self-set by type, show rate by type, ARIP→Deal Review %, Contracts Sent, VP outbound call activity (TT/calls/QCs/avg), pipeline forecast & closed rev. Team scope blends across VPs. Redundant tiles/panels absorbed by the section are hidden for VP scope to de-clutter. Appt type + call-direction taxonomy verified against live workbooks. Incl. r43 Coordination rename)</p></details>
   </>);
 }
